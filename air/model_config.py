@@ -27,14 +27,22 @@ tf.flags.DEFINE_string('opt', '', '')
 tf.flags.DEFINE_string('transition', 'LSTM', '')
 
 tf.flags.DEFINE_float('output_std', .3, '')
-tf.flags.DEFINE_boolean('gradients_through_z', True, '')
+
+allowed_targets = 'iwae rws'.split()
+flags.DEFINE_string('target', 'iwae', 'choose from {}'.format(allowed_targets))
 
 
 def load(img, num):
     F = tf.flags.FLAGS
 
-    glimpse_size = (20, 20)
+    target = F.target.lower()
+    assert target in allowed_targets, 'Target is {} and not in {}'.format(F.target, allowed_targets)
 
+    gradients_through_z = True
+    if target == 'rws':
+        gradients_through_z = False
+
+    glimpse_size = [20, 20]
     n_hidden = 32 * 8
     n_layers = 2
     n_hiddens = [n_hidden] * n_layers
@@ -50,7 +58,7 @@ def load(img, num):
                        glimpse_encoder=partial(Encoder, n_hidden),
                        transform_estimator=partial(StochasticTransformParam, n_hidden, scale_bias=F.transform_var_bias),
                        steps_predictor=partial(StepsPredictor, steps_pred_hidden, F.step_bias),
-                       gradients_through_z=F.gradients_through_z
+                       gradients_through_z=gradients_through_z
     )
 
     glimpse_decoder = partial(Decoder, n_hiddens, output_scale=F.output_multiplier)
@@ -59,5 +67,5 @@ def load(img, num):
     air = AttendInferRepeat(F.n_steps_per_image, batch_size, F.output_std, step_success_prob,
                                 air_cell, glimpse_decoder)
 
-    model = AIRModel(img, air, F.n_iw_samples)
+    model = AIRModel(img, air, F.n_iw_samples, target=target)
     return model

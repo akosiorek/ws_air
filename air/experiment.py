@@ -23,8 +23,6 @@ flags.DEFINE_integer('eval_itr', int(1e5), 'Number of iterations between log p(x
 
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
 
-flags.DEFINE_string('target', 'iwae', 'choose from iwae, rws')
-
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 
 F = flags.FLAGS
@@ -32,7 +30,7 @@ F = flags.FLAGS
 if F.test_run:
     F.report_loss_every = 1
     F.eval_itr = 1e2
-    F.target = 'iwae'
+    F.target = 'rws'
 
 run_name = '{}_target={}'.format(F.run_name, F.target)
 checkpoint_dir = os.path.join(F.logdir, run_name)
@@ -58,7 +56,7 @@ global_step = tf.train.get_or_create_global_step()
 opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
 
 # Optimisation target
-target, gvs = model.make_target(F.target, opt)
+target, gvs = model.make_target(opt)
 train_step = opt.apply_gradients(gvs, global_step=global_step)
 tf.summary.scalar('target', target)
 

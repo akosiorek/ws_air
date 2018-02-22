@@ -8,7 +8,7 @@ class AIRModel(object):
     output_std = 1.
     internal_decode = False
 
-    def __init__(self, obs, model, k_particles=1, debug=False):
+    def __init__(self, obs, model, k_particles, target, debug=False):
         """
 
         :param obs:
@@ -20,6 +20,7 @@ class AIRModel(object):
         self.obs = obs
         self.model = model
         self.k_particles = k_particles
+        self.target = target
         self.debug = debug
 
         shape = self.obs.get_shape().as_list()
@@ -41,34 +42,54 @@ class AIRModel(object):
         # self.gvs = self.gradients()
 
         log_weights = self.outputs.log_weights
-        log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
+        self.log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
 
-        importance_weights = tf.nn.softmax(log_weights, -1)
-        self.elbo_vae = tf.reduce_mean(log_weights)
-        elbo_iwae_per_example = tf.reduce_logsumexp(log_weights, -1) - tf.log(float(self.k_particles))
-        self.elbo_iwae = tf.reduce_mean(elbo_iwae_per_example)
-        
-        control_variate = ops.vimco_baseline(log_weights)
-        learning_signal = tf.stop_gradient(log_weights - control_variate)
-        steps_log_prob = tf.reshape(self.outputs.steps_log_prob, (self.batch_size, self.k_particles))
-        reinforce_target = learning_signal * steps_log_prob
+        self.importance_weights = tf.stop_gradient(tf.nn.softmax(log_weights, -1))
+        self.elbo_vae = tf.reduce_mean(self.log_weights)
+        self.elbo_iwae_per_example = tf.reduce_logsumexp(self.log_weights, -1) - tf.log(float(self.k_particles))
+        self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
-        proxy_loss = -tf.expand_dims(elbo_iwae_per_example, -1) - reinforce_target
-        resample = False
-        if resample:
-            # resample proxy loss
-            pass
-            
-        self.proxy_loss = tf.reduce_mean(proxy_loss)
+    def make_target(self, opt):
+        if self.target == 'iwae':
+            control_variate = ops.vimco_baseline(self.log_weights)
+            learning_signal = tf.stop_gradient(self.log_weights - control_variate)
+            steps_log_prob = tf.reshape(self.outputs.steps_log_prob, (self.batch_size, self.k_particles))
+            reinforce_target = learning_signal * steps_log_prob
 
-    def make_target(self, target, opt):
-        target = self.proxy_loss
-        gvs = opt.compute_gradients(target)
+            proxy_loss = -tf.expand_dims(self.elbo_iwae_per_example, -1) - reinforce_target
+            target = tf.reduce_mean(proxy_loss)
+            gvs = opt.compute_gradients(target)
+        elif self.target == 'rws':
+            # encoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Encoder')
+            # decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='Decoder')
+            decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='attend_infer_repeat/air_decoder/decoder')
+            encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
+
+            print 'encoder'
+            for v in encoder_vars:
+                print v
+            print
+            print 'decoder'
+            for v in decoder_vars:
+                print v
+            print
+            print 'all'
+            for v in tf.trainable_variables():
+                print v
+
+            decoder_target = self.importance_weights * self.outputs.log_p_x_and_z * self.k_particles
+            encoder_target = self.importance_weights * self.outputs.log_q_z * self.k_particles
+
+            decoder_target, encoder_target = [-tf.reduce_mean(i) for i in (decoder_target, encoder_target)]
+
+            target = (decoder_target + encoder_target) / 2.
+            decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
+            encoder_vars = opt.compute_gradients(encoder_target, var_list=encoder_vars)
+            gvs = decoder_gvs + encoder_vars
+        else:
+            raise ValueError('Invalid target: {}'.format(self.target))
+
         return target, gvs
-
-
-
-
 
 
     # def gradients(self, resample=False):
@@ -188,3 +209,21 @@ class AIRModel(object):
     #     value = tf.reduce_mean(resampled)
     #     setattr(self, name, value)
     #     tf.summary.scalar(name, value)
+
+
+def resample(tensor, index, batch_size, k_particles, axis=-1):
+    """
+
+    :param tensor: tf.Tensor of shape [..., batch_size * k_particles, ...]
+    :param index: tf.Tensor of shape [batch_size * k_particles] of integers filled with numbers in [1, ..., k_particles]
+    :param batch_size:
+    :param k_particles:
+    :param axis:
+    :return:
+    """
+    index = index + tf.range(batch_size) * k_particles
+    shape = tensor.shape.as_list()
+    shape[axis] = batch_size
+    resampled = ops.gather_axis(tensor, index, axis)
+    resampled.set_shape(shape)
+    return resampled

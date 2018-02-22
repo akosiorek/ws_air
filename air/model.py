@@ -58,12 +58,12 @@ class AttendInferRepeat(snt.AbstractModule):
         pres = ho.presence
         log_p_z = ho.what_prior_log_prob + ho.where_prior_log_prob
         log_p_z = tf.squeeze(tf.reduce_sum(log_p_z * pres, -2), -1) + ho.steps_prior_log_prob
-        log_p_x_and_z = ho.data_ll + log_p_z
+        ho['log_p_x_and_z'] = ho.data_ll + log_p_z
 
         log_q_z = ho.what_log_prob + ho.where_log_prob
-        log_q_z = tf.squeeze(tf.reduce_sum(log_q_z * pres, -2), -1) + ho.steps_log_prob
+        ho['log_q_z'] = tf.squeeze(tf.reduce_sum(log_q_z * pres, -2), -1) + ho.steps_log_prob
 
-        ho['log_weights'] = log_p_x_and_z - log_q_z
+        ho['log_weights'] = ho.log_p_x_and_z - ho.log_q_z
 
         return ho
 
