@@ -155,13 +155,17 @@ class StepsPredictor(snt.AbstractModule):
 
 class AIRDecoder(snt.AbstractModule):
 
-    def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2):
+    def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2, mean_img=None):
         super(AIRDecoder, self).__init__()
         self._inverse_transformer = SpatialTransformer(img_size, glimpse_size, inverse=True)
         self._batch_dims = batch_dims
+        self._mean_img = mean_img
 
         with self._enter_variable_scope():
             self._glimpse_decoder = glimpse_decoder(glimpse_size)
+            if self._mean_img is not None:
+                self._mean_img = tf.Variable(self._mean_img, dtype=tf.float32, trainable=True)
+                self._mean_img = tf.expand_dims(self._mean_img, 0)
 
     def _build(self, what, where, presence):
         batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
@@ -169,6 +173,10 @@ class AIRDecoder(snt.AbstractModule):
 
         inversed = batch(self._inverse_transformer)(glimpse, logits=where)
         inversed *= presence[..., tf.newaxis, tf.newaxis]
-        canvas = tf.reduce_sum(inversed, axis=-4)
+        canvas = tf.squeeze(tf.reduce_sum(inversed, axis=-4), -1)
 
-        return tf.squeeze(canvas, -1), glimpse
+        if self._mean_img is not None:
+            mask = tf.to_float(tf.not_equal(canvas, 0.))
+            canvas += self._mean_img * mask
+
+        return canvas, glimpse

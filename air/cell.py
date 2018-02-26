@@ -67,6 +67,14 @@ class AIRCell(snt.RNNCore):
             self._steps_predictor = steps_predictor()
 
     @property
+    def n_what(self):
+        return self._n_what
+
+    @property
+    def n_where(self):
+        return self._n_transform_param
+
+    @property
     def state_size(self):
         return [
             np.prod(self._img_size),  # image
@@ -99,29 +107,6 @@ class AIRCell(snt.RNNCore):
     @staticmethod
     def outputs_by_name(hidden_outputs):
         return AttrDict({n: o for n, o in zip(AIRCell._output_names, hidden_outputs)})
-    #
-    # @staticmethod
-    # def extract_latents(hidden_outputs, key=None, skip=None):
-    #     if key is not None and skip is not None:
-    #         raise ValueError("Either `key' or `skip' have to be None, but both are not!")
-    #
-    #     if skip is not None:
-    #         key = (k for k in BaseAPDRCell._latent_name_to_idx.keys() if k not in nest.flatten(skip))
-    #         latent_idx = sorted((BaseAPDRCell._latent_name_to_idx[k] for k in key))
-    #
-    #     elif key is None:
-    #         latent_idx = sorted(BaseAPDRCell._latent_name_to_idx.values())
-    #     else:
-    #         latent_idx = (BaseAPDRCell._latent_name_to_idx[k] for k in nest.flatten(key))
-    #
-    #     if isinstance(hidden_outputs[0], tf.Tensor):
-    #         latents = [hidden_outputs[i] for i in latent_idx]
-    #     else:
-    #         latents = [ops.extract_state(hidden_outputs, i) for i in latent_idx]
-    #
-    #     if len(latents) == 1:
-    #         latents = latents[0]
-    #     return latents
 
     def initial_state(self, img, hidden_state=None):
         batch_size = img.get_shape().as_list()[0]
@@ -138,10 +123,15 @@ class AIRCell(snt.RNNCore):
         init_presence = tf.ones((batch_size, 1), dtype=tf.float32)
         return [flat_img, what_code, where_code, init_presence, hidden_state]
 
-    def _build(self, _, state):
+    def _build(self, inpt, state):
         """Input is unused; it's only to force a maximum number of steps"""
         img_flat, what, where, presence, hidden_state = state
         img = tf.reshape(img_flat, (-1,) + tuple(self._img_size))
+
+        override, latent_o = inpt
+        if not override:
+            latent_o = [None] * 3
+        what_o, where_o, presence_o = latent_o
 
         with tf.variable_scope('rnn_inpt'):
             rnn_inpt = self._input_encoder(img)
@@ -161,14 +151,14 @@ class AIRCell(snt.RNNCore):
                 hidden_output = MLP([self._n_hidden] * 2, name='transition_MLP')(rnn_inpt)
 
         with tf.variable_scope('where'):
-            where, where_loc, where_scale, where_log_prob = self._compute_where(hidden_output)
+            where, where_loc, where_scale, where_log_prob = self._compute_where(hidden_output, where_o)
 
         with tf.variable_scope('presence'):
             presence, presence_logit, presence_log_prob \
-                = self._compute_presence(presence, hidden_output)
+                = self._compute_presence(presence, hidden_output, presence_o)
 
         with tf.variable_scope('what'):
-            what, what_loc, what_scale, what_log_prob = self._compute_what(img, where)
+            what, what_loc, what_scale, what_log_prob = self._compute_what(img, where, what_o)
 
         if self._decoder is not None:
             params = [tf.expand_dims(i, 1) for i in (what, where, presence)]
@@ -185,36 +175,44 @@ class AIRCell(snt.RNNCore):
 
         return output, new_state
 
-    def _compute_where(self, hidden_output):
+    def _compute_where(self, hidden_output, sample):
         where_param = self._transform_estimator(hidden_output)
         loc, scale = where_param
         where_distrib = NormalWithSoftplusScale(scale, loc,
                                                 validate_args=self._debug, allow_nan_stats=not self._debug)
-        sample, sample_log_prob = self._sample(where_distrib)
+        sample, sample_log_prob = self._maybe_sample(where_distrib, sample)
         return sample, where_distrib.loc, where_distrib.scale, sample_log_prob
 
-    def _compute_presence(self, presence, hidden_output):
+    def _compute_presence(self, presence, hidden_output, sample):
         presence_logit = self._steps_predictor(hidden_output)
 
         presence_distrib = Bernoulli(logits=presence_logit, dtype=tf.float32,
                                      validate_args=self._debug, allow_nan_stats=not self._debug)
-        new_presence, sample_log_prob = self._sample(presence_distrib)
+        new_presence, sample_log_prob = self._maybe_sample(presence_distrib, sample)
         presence *= new_presence
 
         return presence, presence_logit, sample_log_prob
 
-    def _compute_what(self, img, where_code):
+    def _compute_what(self, img, where_code, sample):
 
         cropped = self._spatial_transformer(img, logits=where_code)
         flat_crop = snt.BatchFlatten()(cropped)
 
         what_params = self._glimpse_encoder(flat_crop)
         what_distrib = self._what_distrib(what_params)
-        sample, sample_log_prob = self._sample(what_distrib)
+        sample, sample_log_prob = self._maybe_sample(what_distrib, sample)
         return sample, what_distrib.loc, what_distrib.scale, sample_log_prob
 
-    def _sample(self, distrib):
-        sample = distrib.sample()
+    def _maybe_sample(self, distrib, sample=None):
+        """Take a sample from the pdf `distrib` is `sample` is not None. If `sample` is given, it is usead instead.
+        The method also evaluates the log probability of the sample and optionally blocks gradient flow through it.
+
+        :param distrib: tf.Distribution
+        :param sample: tf.Tensor or None
+        :return: (tf.Tensor, tf.Tensor) representing a sample and its log probability
+        """
+        if sample is None:
+            sample = distrib.sample()
         if not self._gradients_through_z:
             sample = tf.stop_gradient(sample)
         return sample, tf.reduce_sum(distrib.log_prob(sample), -1, keep_dims=True)
