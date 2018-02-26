@@ -23,6 +23,8 @@ tf.flags.DEFINE_integer('n_iw_samples', 5, '')
 tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
 tf.flags.DEFINE_boolean('importance_resample', False, '')
 
+tf.flags.DEFINE_boolean('rec_prior', False, '')
+
 tf.flags.DEFINE_string('opt', '', '')
 tf.flags.DEFINE_string('transition', 'LSTM', '')
 
@@ -65,7 +67,9 @@ def load(img, num, mean_img=None):
     step_success_prob = geom_success_prob(F.init_step_success_prob, F.final_step_success_prob)
 
     air = AttendInferRepeat(F.n_steps_per_image, F.output_std, step_success_prob,
-                                air_cell, glimpse_decoder, mean_img=mean_img)
+                            air_cell, glimpse_decoder, mean_img=mean_img,
+                            recurrent_prior=F.rec_prior,
+                            )
 
     model = Model(img, air, F.n_iw_samples, target=target, num_objects=num)
     return model

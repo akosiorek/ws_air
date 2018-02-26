@@ -6,7 +6,7 @@ from tensorflow.contrib.distributions import Normal
 import ops
 from cell import AIRCell
 from modules import AIRDecoder
-from prior import NumStepsDistribution
+from prior import NumStepsDistribution, RecurrentNormal
 import targets
 
 
@@ -14,7 +14,7 @@ class AttendInferRepeat(snt.AbstractModule):
     """Implements both the inference and the generative mdoel for AIRModel"""
 
     def __init__(self, n_steps, output_std, prior_step_success_prob, cell, glimpse_decoder,
-                 mean_img=None):
+                 mean_img=None, recurrent_prior=False):
 
         super(AttendInferRepeat, self).__init__()
         self._n_steps = n_steps
@@ -24,8 +24,12 @@ class AttendInferRepeat(snt.AbstractModule):
         zeros = tf.zeros(self._cell.n_what)
         self._what_prior = Normal(zeros, 1.)
 
-        zeros = tf.zeros(self._cell.n_where)
-        self._where_prior = Normal(zeros, 1.)
+        if recurrent_prior:
+            with tf.variable_scope('attend_infer_repeat/air_decoder'):
+                self._where_prior = RecurrentNormal(self._cell.n_where, 10)
+        else:
+            zeros = tf.zeros(self._cell.n_where)
+            self._where_prior = Normal(zeros, 1.)
 
         self._num_steps_prior = Geometric(probs=1 - prior_step_success_prob)
 
@@ -95,9 +99,9 @@ class AttendInferRepeat(snt.AbstractModule):
 
     def sample(self, sample_size=1):
         w = []
-        for pdf in (self._what_prior, self._where_prior):
-            sample = pdf.sample(sample_size * self._n_steps)
-            shape = [sample_size, self._n_steps] + sample.shape.as_list()[1:]
+        for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
+            sample = pdf.sample(*arg)
+            shape = [sample_size, self._n_steps] + sample.shape.as_list()[-1:]
             sample = tf.reshape(sample, shape)
             w.append(sample)
         what, where = w

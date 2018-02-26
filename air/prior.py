@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
-from tensorflow.contrib.distributions import Bernoulli, Geometric, Categorical
+import tensorflow.contrib.distributions as tfd
+import sonnet as snt
 
 from ops import clip_preserve, sample_from_tensor, anneal_weight
 
@@ -26,7 +27,7 @@ def masked_apply(tensor, op, mask):
 def geometric_prior(success_prob, n_steps):
     # clipping here is ok since we don't compute gradient wrt success_prob
     success_prob = tf.clip_by_value(success_prob, 1e-7, 1. - 1e-15)
-    geom = Geometric(probs=1. - success_prob)
+    geom = tfd.Geometric(probs=1. - success_prob)
     events = tf.range(n_steps + 1, dtype=geom.dtype)
     probs = geom.prob(events)
     return probs, geom
@@ -85,7 +86,7 @@ class NumStepsDistribution(object):
 
     def sample(self, n=None):
         if self._bernoulli is None:
-            self._bernoulli = Bernoulli(self._steps_probs)
+            self._bernoulli = tfd.Bernoulli(self._steps_probs)
 
         sample = self._bernoulli.sample(n)
         sample = tf.cumprod(sample, tf.rank(sample) - 1)
@@ -116,4 +117,71 @@ def geom_success_prob(init_step_success_prob, final_step_success_prob):
                                                  global_step,
                                                  anneal_steps, hold_init, steps_div)
     return tf.to_float(steps_prior_success_prob)
+
+
+class RecurrentNormalImpl(snt.AbstractModule):
+
+    def __init__(self, n_dim, n_hidden):
+        super(RecurrentNormalImpl, self).__init__()
+        self._n_dim = n_dim
+        self._n_hidden = n_hidden
+
+        with self._enter_variable_scope():
+            self._rnn = snt.VanillaRNN(self._n_dim)
+            self._readout = snt.Linear(n_dim * 2)
+            self._init_state = self._rnn.initial_state(1, trainable=True)
+            self._init_sample = tf.zeros((1, self._n_hidden))
+
+    def _build(self, batch_size=1, seq_len=1, override_samples=None):
+
+        s = self._init_sample, self._init_state
+        sample, state = (tf.tile(ss, (batch_size, 1)) for ss in s)
+
+        outputs = [[] for _ in xrange(4)]
+        if override_samples is not None:
+            override_samples = tf.unstack(override_samples, axis=-2)
+            seq_len = len(override_samples)
+
+        for i in xrange(seq_len):
+
+            if override_samples is None:
+                override_sample = None
+            else:
+                override_sample = override_samples[i]
+
+            results = self._forward(sample, state, override_sample)
+
+            for res, output in zip(results, outputs):
+                output.append(res)
+
+        return [tf.stack(o, axis=-2) for o in outputs]
+
+    def _forward(self, sample_m1, hidden_state, sample=None):
+        output, state = self._rnn(sample_m1, hidden_state)
+        stats = self._readout(output)
+        loc, scale = tf.split(stats, 2, -1)
+        scale = tf.nn.softplus(scale)
+        pdf = tfd.Normal(loc, scale)
+
+        if sample is None:
+            sample = pdf.sample()
+
+        return sample, loc, scale, pdf.log_prob(sample)
+
+
+class RecurrentNormal(object):
+
+    def __init__(self, n_dim, n_hidden):
+        self._impl = RecurrentNormalImpl(n_dim, n_hidden)
+
+    def log_prob(self, samples):
+        batch_size = samples.shape.as_list()[0]
+        _, _, _, logprob = self._impl(batch_size=batch_size, override_samples=samples)
+        return logprob
+
+    def sample(self, sample_size=1, length=1):
+        samples, _, _, _ = self._impl(batch_size=sample_size, seq_len=length)
+        return samples
+
+
 
