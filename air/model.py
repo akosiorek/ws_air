@@ -100,7 +100,7 @@ class AttendInferRepeat(snt.AbstractModule):
     def sample(self, sample_size=1):
         w = []
         for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
-            sample = pdf.sample(*arg)
+            sample = pdf.sample(arg)
             shape = [sample_size, self._n_steps] + sample.shape.as_list()[-1:]
             sample = tf.reshape(sample, shape)
             w.append(sample)

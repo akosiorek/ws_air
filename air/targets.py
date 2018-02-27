@@ -4,26 +4,11 @@ import math
 import ops
 
 
-# def _append_gvs(func):
-#
-#     def wrapper(*args, **kwargs):
-#         target = func(*args, **kwargs)
-#         res = target
-#         if 'opt' in kwargs:
-#             res = res, kwargs['opt'].compute_gradients(target)
-#
-#         return res
-#
-#     return wrapper
-
-
-# @_append_gvs
 def iwae(log_weights):
     k_particles = log_weights.shape.as_list()[-1]
     return tf.reduce_logsumexp(log_weights, -1) - math.log(float(k_particles))
 
 
-# @_append_gvs
 def vimco(log_weights, log_probs, elbo_iwae=None):
     control_variate = ops.vimco_baseline(log_weights)
     learning_signal = tf.stop_gradient(log_weights - control_variate)

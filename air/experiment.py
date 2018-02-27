@@ -30,8 +30,9 @@ F = flags.FLAGS
 if F.test_run:
     F.report_loss_every = 1
     F.eval_itr = 1e2
-    F.target = 'rws+sleep'
-    F.init_step_success_prob = .5
+    F.target = 'ws'
+    F.init_step_success_prob = .05
+    F.rec_prior = True
 
 run_name = '{}_target={}'.format(F.run_name, F.target)
 checkpoint_dir = os.path.join(F.logdir, run_name)

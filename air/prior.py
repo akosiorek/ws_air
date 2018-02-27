@@ -179,7 +179,13 @@ class RecurrentNormal(object):
         _, _, _, logprob = self._impl(batch_size=batch_size, override_samples=samples)
         return logprob
 
-    def sample(self, sample_size=1, length=1):
+    def sample(self, sample_size=(1, 1)):
+        """
+
+        :param sample_size: tuple of (num samples, seq_length)
+        :return:
+        """
+        sample_size, length = sample_size
         samples, _, _, _ = self._impl(batch_size=sample_size, seq_len=length)
         return samples
 
