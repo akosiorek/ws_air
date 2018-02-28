@@ -2,6 +2,8 @@ import math
 import tensorflow as tf
 from tensorflow.python.util import nest
 
+import modules
+
 
 def clip_preserve(expr, min, max):
     """Clips the immediate gradient but preserves the chain rule
@@ -166,3 +168,35 @@ def anneal_weight(init_val, final_val, anneal_type, global_step, anneal_steps, h
 
     anneal_weight = tf.maximum(final, val)
     return anneal_weight
+
+
+def sort_by_distance_to_origin(what, where, presence):
+    """Sorts latents along the axis=-2 by the distance of the respective object to the
+    origin (in upper left corner of the image).
+
+    :param what: tf.Tensor
+    :param where: tf.Tensor
+    :param presence: tf.Tensor
+    :return: list of tf.Tensor; [what, where, presence] sorted accordingly
+    """
+
+    coords = modules.SpatialTransformer.to_coords(where)
+    local_xy = coords[..., 2:]
+    global_xy = local_xy + 1.
+    dist_to_origin = tf.reduce_sum(tf.pow(global_xy, 2), -1)
+
+    # force idx of present object to be always lower than that of non-present
+    dist_to_origin -= 1e16 * tf.squeeze(presence, -1)
+
+    k = int(dist_to_origin.shape[-1])
+    idx = tf.nn.top_k(-dist_to_origin, k=k, sorted=False).indices
+
+    def gather(tensor, idx):
+        offset = tf.range(idx.shape[0]) * idx.shape[1]
+        idx += tf.expand_dims(offset, -1)
+        flat_idx = tf.reshape(idx, [-1])
+        flat_tensor = tf.reshape(tensor, (tf.shape(flat_idx)[0], -1))
+        res = tf.gather(flat_tensor, flat_idx)
+        return tf.reshape(res, tf.shape(tensor))
+
+    return [gather(i, idx) for i in (what, where, presence)]

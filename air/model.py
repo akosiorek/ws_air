@@ -110,6 +110,7 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.to_float(tf.sequence_mask(n, maxlen=self._n_steps))
         presence = tf.expand_dims(presence, -1)
 
+        what, where, presence = ops.sort_by_distance_to_origin(what, where, presence)
         obs, _ = self._decoder(what, where, presence)
         return obs, what, where, presence
 
@@ -119,7 +120,7 @@ class Model(object):
     output_std = 1.
     internal_decode = False
 
-    def __init__(self, obs, model, k_particles, target, num_objects=None, debug=False):
+    def __init__(self, obs, model, k_particles, target, target_arg=None, num_objects=None, debug=False):
         """
 
         :param obs:
@@ -132,6 +133,8 @@ class Model(object):
         self.model = model
         self.k_particles = k_particles
         self.target = target
+        self.target_arg = target_arg
+
         self.gt_num_objects = num_objects
         self.debug = debug
 
@@ -152,15 +155,24 @@ class Model(object):
         log_weights = self.outputs.log_weights
         self.log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
 
-        self.importance_weights = tf.stop_gradient(tf.nn.softmax(log_weights, -1))
+        self.importance_weights = tf.stop_gradient(tf.nn.softmax(self.log_weights, -1))
+        self.ess = tf.reduce_mean(tf.pow(tf.reduce_sum(self.importance_weights, -1), 2) / tf.reduce_sum(tf.pow(self.importance_weights, 2), -1))
+        tf.summary.scalar('ess/value', self.ess)
+
         self.elbo_vae = tf.reduce_mean(self.log_weights)
         self.elbo_iwae_per_example = tf.reduce_logsumexp(self.log_weights, -1) - tf.log(float(self.k_particles))
         self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
-        # if self.gt_num_objects is not None:
-        #     self.gt_num_steps = tf.reduce_sum(self.gt_num_objects, -1)
-        #     num_step_per_sample = self._resample(self.outputs.num_steps)
-        #     self.num_step_accuracy = tf.reduce_mean(tf.to_float(tf.equal(self.gt_num_steps, num_step_per_sample)))
+        self.num_steps_per_example = self.outputs.num_steps
+        self.num_steps = tf.reduce_mean(self.num_steps_per_example)
+
+        if self.gt_num_objects is not None:
+            self.gt_num_steps = tf.reduce_sum(self.gt_num_objects, -1)
+            # num_step_per_sample = self._resample(self.outputs.num_steps)
+            num_step_per_sample = self.num_steps_per_example
+            num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.k_particles))
+            gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
+            self.num_step_accuracy = tf.reduce_mean(tf.to_float(tf.equal(gt_num_steps, num_step_per_sample)))
 
     def make_target(self, opt):
 
@@ -173,13 +185,22 @@ class Model(object):
                                              scope='attend_infer_repeat/air_decoder')
             encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
 
+            importance_weights = self.importance_weights
+
+            if 'annealed' in self.target_arg.lower():
+                target_ess = float(self.target_arg.split('_')[-1]) * self.k_particles
+                self.alpha = targets.pynverse_find_alpha(target_ess, self.log_weights)
+                importance_weights = tf.nn.softmax(self.log_weights * self.alpha, -1)
+                self.alpha_importance_weights = importance_weights
+                self.alpha_ess = tf.reduce_mean(tf.pow(tf.reduce_sum(importance_weights, -1), 2) / tf.reduce_sum(tf.pow(importance_weights, 2), -1))
+                tf.summary.scalar('ess/alpha_value', self.alpha_ess)
+                tf.summary.scalar('ess/alpha', self.alpha)
+
             if self.target == 'rws':
-                args = self.outputs.log_p_x_and_z, self.outputs.log_q_z, self.importance_weights
-                decoder_target, encoder_target = targets.reweighted_wake_wake(*args)
+                decoder_target, encoder_target = self._rwrw_targets(importance_weights)
 
             elif self.target == 'rws+sleep':
-                args = self.outputs.log_p_x_and_z, self.outputs.log_q_z, self.importance_weights
-                decoder_target, encoder_wake_target = targets.reweighted_wake_wake(*args)
+                decoder_target, encoder_wake_target = self._rwrw_targets(importance_weights)
 
                 obs, what, where, presence = self.model.sample(self.batch_size)
                 sleep_outputs = self.model(obs, latent_override=[what, where, presence])
@@ -208,23 +229,7 @@ class Model(object):
 
         return target, gvs
 
-#     def _resample(self, tensor, axis=-1):
-#         return resample(tensor, self.importance_weights, self.batch_size, self.k_particles, axis)
-#
-#
-# def resample(tensor, index, batch_size, k_particles, axis=-1):
-#     """
-#
-#     :param tensor: tf.Tensor of shape [..., batch_size * k_particles, ...]
-#     :param index: tf.Tensor of shape [batch_size * k_particles] of integers filled with numbers in [1, ..., k_particles]
-#     :param batch_size:
-#     :param k_particles:
-#     :param axis:
-#     :return:
-#     """
-#     index = index + tf.range(batch_size) * k_particles
-#     shape = tensor.shape.as_list()
-#     shape[axis] = batch_size
-#     resampled = ops.gather_axis(tensor, index, axis)
-#     resampled.set_shape(shape)
-#     return resampled
+    def _rwrw_targets(self, imp_weights):
+        logpxz = tf.reshape(self.outputs.log_p_x_and_z, (self.batch_size, self.k_particles))
+        logqz = tf.reshape(self.outputs.log_q_z, (self.batch_size, self.k_particles))
+        return targets.reweighted_wake_wake(logpxz, logqz, imp_weights)

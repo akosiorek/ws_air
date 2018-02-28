@@ -1,4 +1,7 @@
+import numpy as np
 import tensorflow as tf
+from pynverse import inversefunc
+
 import math
 
 import ops
@@ -40,3 +43,33 @@ def reweighted_wake_wake(logpxz, logqz, importance_weights=None):
 
     decoder_target, encoder_target = [-tf.reduce_mean(i) for i in (decoder_target, encoder_target)]
     return decoder_target, encoder_target
+
+
+def pynverse_find_alpha_impl(target_ess, weights):
+    def ess(weights, alpha):
+        weights = weights ** alpha
+        res = weights.sum(-1) ** 2 / (weights ** 2).sum(-1)
+        return res.mean()
+
+    f = lambda a: ess(weights, a)
+    try:
+        alpha = inversefunc(f, y_values=target_ess, domain=[0, 1])
+    except ValueError as err:
+        try:
+            target_ess = float(err.message.split(' ')[-4]) * 1.01
+            if target_ess >= weights.shape[-1]:
+                alpha = 1.
+            else:
+                alpha = inversefunc(f, y_values=target_ess, domain=[0, 1])
+
+        except ValueError:
+            alpha = 1.0
+
+    return np.float32(alpha)
+
+
+def pynverse_find_alpha(target_ess, log_weights):
+    weights = tf.nn.softmax(log_weights)
+    func = tf.py_func(pynverse_find_alpha_impl, [target_ess, weights], tf.float32)
+    func.set_shape([])
+    return func

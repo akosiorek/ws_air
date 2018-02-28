@@ -11,14 +11,14 @@ flags = tf.flags
 
 
 flags.DEFINE_string('logdir', '../checkpoints', 'Root folder for log files')
-flags.DEFINE_string('run_name', 'test', 'Folder in which all run information is stored')
+flags.DEFINE_string('run_name', 'test3', 'Folder in which all run information is stored')
 
 flags.DEFINE_integer('batch_size', 32, '')
 
 flags.DEFINE_integer('train_itr', int(3e5), 'Number of training iterations')
 flags.DEFINE_integer('log_itr', int(1e3), 'Number of iterations between logs')
 flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better reporting minibatch loss - hearbeat')
-flags.DEFINE_integer('snapshot_itr', int(1e5), 'Number of iterations between model snapshots')
+flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
 flags.DEFINE_integer('eval_itr', int(1e5), 'Number of iterations between log p(x) is estimated')
 
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
@@ -28,13 +28,20 @@ flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 F = flags.FLAGS
 
 if F.test_run:
-    F.report_loss_every = 1
+    F.report_loss_every = 10
     F.eval_itr = 1e2
+    F.log_itr = 10
     F.target = 'ws'
-    F.init_step_success_prob = .05
+    F.init_step_success_prob = .75
+    F.final_step_success_prob = .75
     F.rec_prior = True
+    F.n_iw_samples = 5
+    # F.target_arg = 'annealed_0.90'
 
-run_name = '{}_target={}'.format(F.run_name, F.target)
+run_name = '{}_k={}_target={}'.format(F.run_name, F.n_iw_samples, F.target)
+if F.target_arg:
+    run_name += '_{}'.format(F.target_arg)
+
 checkpoint_dir = os.path.join(F.logdir, run_name)
 
 if not os.path.exists(checkpoint_dir):
@@ -54,6 +61,8 @@ model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=me
 # ELBO
 tf.summary.scalar('elbo/iwae', model.elbo_iwae)
 tf.summary.scalar('elbo/vae', model.elbo_vae)
+tf.summary.scalar('steps/num', model.num_steps)
+tf.summary.scalar('steps/accuracy', model.num_step_accuracy)
 
 # Training setup
 global_step = tf.train.get_or_create_global_step()
@@ -64,14 +73,24 @@ target, gvs = model.make_target(opt)
 train_step = opt.apply_gradients(gvs, global_step=global_step)
 tf.summary.scalar('target', target)
 
+grad_abs_mean, grad_mean, grad_var = 0., 0., 0.
+for g, v in gvs:
+    mean, var = tf.nn.moments(g, range(len(g.shape)))
+    grad_abs_mean += tf.reduce_mean(abs(g))
+    grad_mean += mean
+    grad_var += var
+
+tf.summary.scalar('grad/abs_mean', grad_abs_mean / len(gvs))
+tf.summary.scalar('grad/mean', grad_mean / len(gvs))
+tf.summary.scalar('grad/var', grad_var / len(gvs))
+
+
 saver = tf.train.Saver(max_to_keep=10000)
 summary_writer = tf.summary.FileWriter(checkpoint_dir, tf.get_default_graph())
 summary_op = tf.summary.merge_all()
 
 sess = get_session()
 sess.run(tf.global_variables_initializer())
-
-itr = sess.run(global_step)
 
 
 def estimate(n_itr, dataset, dataset_name):
@@ -94,8 +113,7 @@ def evaluate(n_itr):
     #     .format(*estimate(n_itr, train_data, 'train'))
     pass
 
-num_steps = tf.reduce_mean(model.outputs.num_steps)
-report = [model.elbo_iwae, num_steps]
+report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy]
 
 train_itr = sess.run(global_step)
 print sess.run(report)
@@ -109,13 +127,13 @@ while train_itr < F.train_itr:
 
     if train_itr % F.log_itr == 0 and summary_op is not None:
         summary = sess.run(summary_op)
-        summary_writer.add_summary(summary, itr)
+        summary_writer.add_summary(summary, train_itr)
 
-    if itr > 0 and itr % F.snapshot_itr == 0:
+    if train_itr > 0 and train_itr % F.snapshot_itr == 0:
         saver.save(sess, checkpoint_path, global_step=train_itr)
 
-    if itr > 0 and itr % F.eval_itr == 0:
-        evaluate(itr)
+    if train_itr > 0 and train_itr % F.eval_itr == 0:
+        evaluate(train_itr)
 
 saver.save(sess, checkpoint_path, global_step=train_itr)
 evaluate(train_itr)

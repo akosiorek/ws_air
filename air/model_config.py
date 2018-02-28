@@ -24,6 +24,7 @@ tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
 tf.flags.DEFINE_boolean('importance_resample', False, '')
 
 tf.flags.DEFINE_boolean('rec_prior', False, '')
+tf.flags.DEFINE_string('target_arg', '', '')
 
 tf.flags.DEFINE_string('opt', '', '')
 tf.flags.DEFINE_string('transition', 'LSTM', '')
@@ -71,5 +72,5 @@ def load(img, num, mean_img=None):
                             recurrent_prior=F.rec_prior,
                             )
 
-    model = Model(img, air, F.n_iw_samples, target=target, num_objects=num)
+    model = Model(img, air, F.n_iw_samples, target=target, target_arg=F.target_arg, num_objects=num)
     return model

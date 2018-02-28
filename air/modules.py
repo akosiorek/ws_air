@@ -167,6 +167,9 @@ class AIRDecoder(snt.AbstractModule):
                 self._mean_img = tf.Variable(self._mean_img, dtype=tf.float32, trainable=True)
                 self._mean_img = tf.expand_dims(self._mean_img, 0)
 
+    def to_coords(self, where_logits):
+        return self._inverse_transformer.to_coords(where_logits)
+
     def _build(self, what, where, presence):
         batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
         glimpse = batch(self._glimpse_decoder)(what)
