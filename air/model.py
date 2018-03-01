@@ -119,6 +119,7 @@ class Model(object):
     """Generic AIRModel model"""
     output_std = 1.
     internal_decode = False
+    TARGETS = 'iwae rwrw rw+sleep rwrw+sleep ws'.split()
 
     def __init__(self, obs, model, k_particles, target, target_arg=None, num_objects=None, debug=False):
         """
@@ -180,7 +181,7 @@ class Model(object):
             target = targets.vimco(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
             gvs = opt.compute_gradients(target)
 
-        elif self.target in 'ws rws rws+sleep':
+        elif self.target in self.TARGETS[1:]:
             decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                              scope='attend_infer_repeat/air_decoder')
             encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
@@ -196,10 +197,19 @@ class Model(object):
                 tf.summary.scalar('ess/alpha_value', self.alpha_ess)
                 tf.summary.scalar('ess/alpha', self.alpha)
 
-            if self.target == 'rws':
+            if self.target == 'rwrw':
                 decoder_target, encoder_target = self._rwrw_targets(importance_weights)
 
-            elif self.target == 'rws+sleep':
+            elif self.target == 'rw+sleep':
+                decoder_target, _ = self._rwrw_targets(importance_weights)
+
+                sample = self.model.sample(self.batch_size)
+                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
+                sleep_outputs = self.model(obs, latent_override=[what, where, presence])
+
+                encoder_target = -tf.reduce_mean(sleep_outputs.log_q_z)
+
+            elif self.target == 'rwrw+sleep':
                 decoder_target, encoder_wake_target = self._rwrw_targets(importance_weights)
 
                 sample = self.model.sample(self.batch_size)
@@ -210,11 +220,12 @@ class Model(object):
                 encoder_target = (encoder_sleep_target + encoder_wake_target) / 2.
 
             elif self.target == 'ws':
-                obs, what, where, presence = self.model.sample(self.batch_size)
+                sample = self.model.sample(self.batch_size)
+                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
                 sleep_outputs = self.model(obs, latent_override=[what, where, presence])
 
-                args = self.outputs.log_p_x_and_z, sleep_outputs.log_q_z, 1.
-                decoder_target, encoder_target = targets.reweighted_wake_wake(*args)
+                decoder_target = -tf.reduce_mean(self.outputs.log_p_x_and_z)
+                encoder_target = -tf.reduce_mean(sleep_outputs.log_q_z)
 
             target = (decoder_target + encoder_target) / 2.
             decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)

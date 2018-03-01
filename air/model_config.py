@@ -32,15 +32,14 @@ tf.flags.DEFINE_string('transition', 'LSTM', '')
 
 tf.flags.DEFINE_float('output_std', .3, '')
 
-allowed_targets = 'iwae rws ws rws+sleep'.split()
-flags.DEFINE_string('target', 'iwae', 'choose from {}'.format(allowed_targets))
+flags.DEFINE_string('target', 'iwae', 'choose from {}'.format(Model.TARGETS))
 
 
 def load(img, num, mean_img=None):
     F = tf.flags.FLAGS
 
     target = F.target.lower()
-    assert target in allowed_targets, 'Target is {} and not in {}'.format(F.target, allowed_targets)
+    assert target in Model.TARGETS, 'Target is {} and not in {}'.format(F.target, Model.TARGETS)
 
     gradients_through_z = True
     if target == 'rws+sleep':

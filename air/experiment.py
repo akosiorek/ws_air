@@ -12,7 +12,7 @@ flags = tf.flags
 
 
 flags.DEFINE_string('logdir', '../checkpoints', 'Root folder for log files')
-flags.DEFINE_string('run_name', 'test2', 'Folder in which all run information is stored')
+flags.DEFINE_string('run_name', 'run', 'Folder in which all run information is stored')
 
 flags.DEFINE_integer('batch_size', 32, '')
 
@@ -27,7 +27,7 @@ flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
 flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
-flags.DEFINE_boolean('eval_on_train', False, 'Evaluates on the train set if True')
+flags.DEFINE_boolean('eval_on_train', True, 'Evaluates on the train set if True')
 
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
@@ -36,9 +36,11 @@ os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
 
 
 if F.test_run:
+    F.run_name = 'test'
+    F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'ws'
+    F.target = 'rwrw+sleep'
     F.init_step_success_prob = .75
     F.final_step_success_prob = .75
     F.rec_prior = True
