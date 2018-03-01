@@ -19,7 +19,7 @@ class ParametrisedGaussian(snt.AbstractModule):
         self._n_params = n_params
         self._loc_mult = loc_mult
         self._scale_offset = scale_offset
-        self._create_distrib = lambda x, y: Normal(x, tf.nn.softplus(y) + 1e-8, *args, **kwargs)
+        self._create_distrib = lambda x, y: Normal(x, tf.nn.softplus(y) + 1e-4, *args, **kwargs)
 
     def _build(self, inpt):
         transform = snt.Linear(2 * self._n_params)

@@ -6,7 +6,7 @@ import tensorflow as tf
 
 from model_config import load as load_model
 from data_config import load as load_data
-from tools import save_flags, get_session
+from tools import save_flags, get_session, make_logger
 
 flags = tf.flags
 
@@ -20,13 +20,14 @@ flags.DEFINE_integer('train_itr', int(1e6), 'Number of training iterations')
 flags.DEFINE_integer('log_itr', int(1e3), 'Number of iterations between logs')
 flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better reporting minibatch loss - hearbeat')
 flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
-flags.DEFINE_integer('eval_itr', int(1e5), 'Number of iterations between log p(x) is estimated')
+flags.DEFINE_integer('eval_itr', int(5e3), 'Number of iterations between log p(x) is estimated')
 
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
 flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
+flags.DEFINE_boolean('eval_on_train', False, 'Evaluates on the train set if True')
 
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
@@ -34,10 +35,8 @@ F = flags.FLAGS
 os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
 
 
-
 if F.test_run:
     F.report_loss_every = 10
-    F.eval_itr = 1e2
     F.log_itr = 10
     F.target = 'ws'
     F.init_step_success_prob = .75
@@ -109,30 +108,16 @@ if F.restore:
     saver.restore(sess, last_checkpoint)
 
 
-def estimate(n_itr, dataset, dataset_name):
-    """
-
-    :param n_itr: int, number of training iteration
-    :param dataset: one MNIST datasets
-    :param dataset_name: string, name to use for logging
-    :return: float, estimate of the mean_log_weights
-    """
-    tensors = [target, model.vae, model.miwae, model.iwae, model.data_ll, model.kl]
-    names = 'target vae miwae iwae data_ll kl'.split()
-    return model.estimate(sess, dataset, tensors, names, dataset_name, n_itr, summary_writer)
-
-
-def evaluate(n_itr):
-    # print 'test target = {:.02f}, vae = {:.02f}, miwae = {:.02f}, iwae = {:.02f}, rec = {:.02f}'\
-        # .format(*estimate(n_itr, test_data, 'test'))
-    # print 'train target = {:.02f}, vae = {:.02f}, miwae = {:.02f}, iwae = {:.02f}, rec = {:.02f}'\
-    #     .format(*estimate(n_itr, train_data, 'train'))
-    pass
-
 report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy]
+
+train_data, valid_data = [data_dict[k] for k in 'train_tensors valid_tensors'.split()]
+num_train_batches, num_valid_batches = [data_dict[k].imgs.shape[0] // F.batch_size for k in 'train_data valid_data'.split()]
+evaluate = make_logger(model, sess, summary_writer, train_data, num_train_batches, valid_data, num_valid_batches, F.eval_on_train)
+
 
 train_itr = sess.run(global_step)
 print sess.run(report)
+
 if train_itr == 0:
     evaluate(train_itr)
 

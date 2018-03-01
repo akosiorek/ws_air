@@ -177,7 +177,7 @@ class AIRCell(snt.RNNCore):
 
     def _compute_where(self, hidden_output, sample):
         loc, scale = self._transform_estimator(hidden_output)
-        scale = tf.nn.softplus(scale) + 1e-8
+        scale = tf.nn.softplus(scale) + 1e-4
         where_distrib = Normal(loc, scale, validate_args=self._debug, allow_nan_stats=not self._debug)
         sample, sample_log_prob = self._maybe_sample(where_distrib, sample)
         return sample, where_distrib.loc, where_distrib.scale, sample_log_prob

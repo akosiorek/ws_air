@@ -66,7 +66,7 @@ def load(img, num, mean_img=None):
     )
 
     glimpse_decoder = partial(Decoder, n_hiddens, output_scale=F.output_multiplier)
-    if F.step_success_prob =! -1.:
+    if F.step_success_prob != -1.:
         assert 0. <= F.step_success_prob <= 1.
         step_success_prob = F.step_success_prob
     else:
