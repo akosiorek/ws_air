@@ -2,6 +2,7 @@ import json
 import os
 import tensorflow as tf
 from tensorflow.python.util import nest
+from tensorflow.python import debug as tf_debug
 
 import cPickle as pickle
 
@@ -42,8 +43,13 @@ def save_pickle(path, data):
         pickle.dump(data, f, pickle.HIGHEST_PROTOCOL)
 
 
-def get_session():
+def get_session(tfdbg=False):
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     sess = tf.Session(config=config)
+
+    if tfdbg:
+        sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        sess.add_tensor_filter("has_inf_or_nan", tf_debug.has_inf_or_nan)
+
     return sess

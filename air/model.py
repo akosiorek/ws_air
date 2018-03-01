@@ -53,7 +53,7 @@ class AttendInferRepeat(snt.AbstractModule):
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
 
         # Post-processing
-        num_steps_posterior = NumStepsDistribution(tf.nn.sigmoid(ho.presence_logit[..., 0]))
+        num_steps_posterior = NumStepsDistribution(logits=ho.presence_logit[..., 0])
         ho['num_steps'] = tf.reduce_sum(ho.presence[..., 0], -1)
         ho['steps_log_prob'] = num_steps_posterior.log_prob(ho.num_steps)
         ho['steps_prior_log_prob'] = self._num_steps_prior.log_prob(ho.num_steps)
@@ -202,7 +202,8 @@ class Model(object):
             elif self.target == 'rws+sleep':
                 decoder_target, encoder_wake_target = self._rwrw_targets(importance_weights)
 
-                obs, what, where, presence = self.model.sample(self.batch_size)
+                sample = self.model.sample(self.batch_size)
+                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
                 sleep_outputs = self.model(obs, latent_override=[what, where, presence])
 
                 encoder_sleep_target = -tf.reduce_mean(sleep_outputs.log_q_z)

@@ -2,7 +2,7 @@ import numpy as np
 import sonnet as snt
 import tensorflow as tf
 from attrdict import AttrDict
-from tensorflow.contrib.distributions import Bernoulli, NormalWithSoftplusScale
+from tensorflow.contrib.distributions import Bernoulli, Normal
 
 from modules import SpatialTransformer, ParametrisedGaussian
 from neural import MLP
@@ -176,10 +176,9 @@ class AIRCell(snt.RNNCore):
         return output, new_state
 
     def _compute_where(self, hidden_output, sample):
-        where_param = self._transform_estimator(hidden_output)
-        loc, scale = where_param
-        where_distrib = NormalWithSoftplusScale(scale, loc,
-                                                validate_args=self._debug, allow_nan_stats=not self._debug)
+        loc, scale = self._transform_estimator(hidden_output)
+        scale = tf.nn.softplus(scale) + 1e-8
+        where_distrib = Normal(loc, scale, validate_args=self._debug, allow_nan_stats=not self._debug)
         sample, sample_log_prob = self._maybe_sample(where_distrib, sample)
         return sample, where_distrib.loc, where_distrib.scale, sample_log_prob
 

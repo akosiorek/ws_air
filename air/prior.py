@@ -75,11 +75,15 @@ class NumStepsDistribution(object):
     Transforms Bernoulli probabilities of an event = 1 into p(n) where n is the number of steps
     as described in the AIRModel paper."""
 
-    def __init__(self, probs):
+    def __init__(self, probs=None, logits=None):
         """
 
         :param probs: tensor; Bernoulli success probabilities
         """
+        if probs is None:
+            assert logits is not None
+            probs = tf.nn.sigmoid(logits)
+
         self._steps_probs = probs
         self._joint = bernoulli_to_modified_geometric(probs)
         self._bernoulli = None

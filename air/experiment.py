@@ -1,4 +1,5 @@
 import os
+import sys
 import numpy as np
 
 import tensorflow as tf
@@ -11,11 +12,11 @@ flags = tf.flags
 
 
 flags.DEFINE_string('logdir', '../checkpoints', 'Root folder for log files')
-flags.DEFINE_string('run_name', 'test3', 'Folder in which all run information is stored')
+flags.DEFINE_string('run_name', 'test2', 'Folder in which all run information is stored')
 
 flags.DEFINE_integer('batch_size', 32, '')
 
-flags.DEFINE_integer('train_itr', int(3e5), 'Number of training iterations')
+flags.DEFINE_integer('train_itr', int(1e6), 'Number of training iterations')
 flags.DEFINE_integer('log_itr', int(1e3), 'Number of iterations between logs')
 flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better reporting minibatch loss - hearbeat')
 flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
@@ -24,8 +25,15 @@ flags.DEFINE_integer('eval_itr', int(1e5), 'Number of iterations between log p(x
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
+flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
+flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
+
+flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
 F = flags.FLAGS
+os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
+
+
 
 if F.test_run:
     F.report_loss_every = 10
@@ -86,11 +94,19 @@ tf.summary.scalar('grad/var', grad_var / len(gvs))
 
 
 saver = tf.train.Saver(max_to_keep=10000)
+
 summary_writer = tf.summary.FileWriter(checkpoint_dir, tf.get_default_graph())
 summary_op = tf.summary.merge_all()
 
-sess = get_session()
+sess = get_session(tfdbg=F.tfdbg)
+
 sess.run(tf.global_variables_initializer())
+
+if F.restore:
+    checkpoint_state = tf.train.get_checkpoint_state(checkpoint_dir)
+    checkpoint_paths = checkpoint_state.all_model_checkpoint_paths
+    last_checkpoint = checkpoint_paths[-1]
+    saver.restore(sess, last_checkpoint)
 
 
 def estimate(n_itr, dataset, dataset_name):
@@ -124,6 +140,10 @@ while train_itr < F.train_itr:
     l, train_itr, _ = sess.run([report, global_step, train_step])
     if train_itr % F.report_loss_every == 0:
         print train_itr, l
+
+    if np.isnan(l).any():
+        print 'NaN in reports; breaking...'
+        sys.exit(1)
 
     if train_itr % F.log_itr == 0 and summary_op is not None:
         summary = sess.run(summary_op)

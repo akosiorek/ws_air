@@ -16,6 +16,7 @@ tf.flags.DEFINE_float('transform_var_bias', -3., '')
 tf.flags.DEFINE_float('output_multiplier', .25, '')
 tf.flags.DEFINE_float('init_step_success_prob', 1. - 1e-7, '')
 tf.flags.DEFINE_float('final_step_success_prob', 1e-5, '')
+tf.flags.DEFINE_float('step_success_prob', -1., 'in [0, 1.]; it\'s annealed from `init` to `final` if not set.')
 
 tf.flags.DEFINE_float('n_anneal_steps_loss', 1e3, '')
 tf.flags.DEFINE_integer('n_iw_samples', 5, '')
@@ -65,7 +66,11 @@ def load(img, num, mean_img=None):
     )
 
     glimpse_decoder = partial(Decoder, n_hiddens, output_scale=F.output_multiplier)
-    step_success_prob = geom_success_prob(F.init_step_success_prob, F.final_step_success_prob)
+    if F.step_success_prob =! -1.:
+        assert 0. <= F.step_success_prob <= 1.
+        step_success_prob = F.step_success_prob
+    else:
+        step_success_prob = geom_success_prob(F.init_step_success_prob, F.final_step_success_prob)
 
     air = AttendInferRepeat(F.n_steps_per_image, F.output_std, step_success_prob,
                             air_cell, glimpse_decoder, mean_img=mean_img,

@@ -2,7 +2,7 @@ import functools
 import numpy as np
 
 import tensorflow as tf
-from tensorflow.contrib.distributions import NormalWithSoftplusScale
+from tensorflow.contrib.distributions import Normal
 from tensorflow.python.util import nest
 from tensorflow.contrib.resampler import resampler as tf_resampler
 
@@ -19,7 +19,7 @@ class ParametrisedGaussian(snt.AbstractModule):
         self._n_params = n_params
         self._loc_mult = loc_mult
         self._scale_offset = scale_offset
-        self._create_distrib = lambda x, y: NormalWithSoftplusScale(x, y, *args, **kwargs)
+        self._create_distrib = lambda x, y: Normal(x, tf.nn.softplus(y) + 1e-8, *args, **kwargs)
 
     def _build(self, inpt):
         transform = snt.Linear(2 * self._n_params)
