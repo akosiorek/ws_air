@@ -200,3 +200,22 @@ def sort_by_distance_to_origin(what, where, presence):
         return tf.reshape(res, tf.shape(tensor))
 
     return [gather(i, idx) for i in (what, where, presence)]
+
+
+def ess(weights, average=False):
+    res = tf.pow(tf.reduce_sum(weights, -1), 2) / tf.reduce_sum(tf.pow(weights, 2), -1)
+    if average:
+        res = tf.reduce_mean(res)
+
+    return res
+
+
+def log_ess(log_weights, average=False):
+    ess_num = 2. * tf.reduce_logsumexp(log_weights, axis=-1)
+    ess_denom = tf.reduce_logsumexp(2 * log_weights, axis=-1)
+    res = ess_num - ess_denom
+
+    if average:
+        res = tf.reduce_mean(res)
+
+    return res

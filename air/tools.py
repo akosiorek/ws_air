@@ -62,7 +62,19 @@ def make_logger(air, sess, writer, train_tensor, num_train_batches, test_tensor,
         'elbo_iwae': air.elbo_iwae,
         'num_steps': air.num_steps,
         'num_steps_acc': air.num_step_accuracy,
+        'ess': air.ess
     }
+
+    maybe_exprs = {
+        'ess_alpha': lambda: air.alpha_ess,
+        'alpha': lambda: air.alpha
+    }
+
+    for k, expr in maybe_exprs.iteritems():
+        try:
+            exprs[k] = expr()
+        except AttributeError:
+            pass
 
     data_dict = {
         train_tensor['imgs']: test_tensor['imgs'],

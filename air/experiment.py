@@ -40,11 +40,18 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rw+rws'
+    F.target = 'rw+rw'
     F.step_success_prob = .75
-    F.rec_prior = True
+    # F.rec_prior = True
     F.k_particles = 5
-    # F.target_arg = 'annealed_0.90'
+    F.target_arg = 'annealed_0.5'
+
+# Load Data and model
+data_dict = load_data(F.batch_size)
+
+mean_img = data_dict.train_data.imgs.mean(0)
+model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=mean_img)
+
 
 run_name = '{}_k={}_target={}'.format(F.run_name, F.k_particles, F.target)
 if F.target_arg:
@@ -59,13 +66,6 @@ save_flags(F, checkpoint_dir)
 checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
 
 
-# Load Data and model
-data_dict = load_data(F.batch_size)
-
-mean_img = data_dict.train_data.imgs.mean(0)
-model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=mean_img)
-
-
 # ELBO
 tf.summary.scalar('elbo/iwae', model.elbo_iwae)
 tf.summary.scalar('elbo/vae', model.elbo_vae)
@@ -78,8 +78,11 @@ opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
 
 # Optimisation target
 target, gvs = model.make_target(opt)
-train_step = opt.apply_gradients(gvs, global_step=global_step)
 tf.summary.scalar('target', target)
+
+update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
+with tf.control_dependencies(update_ops):
+    train_step = opt.apply_gradients(gvs, global_step=global_step)
 
 grad_abs_mean, grad_mean, grad_var = 0., 0., 0.
 for g, v in gvs:
@@ -110,6 +113,9 @@ if F.restore:
 
 
 report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy]
+
+if 'annealed' in F.target_arg:
+    report += [model.alpha, model.ess, model.alpha_ess]
 
 train_data, valid_data = [data_dict[k] for k in 'train_tensors valid_tensors'.split()]
 num_train_batches, num_valid_batches = [data_dict[k].imgs.shape[0] // F.batch_size for k in 'train_data valid_data'.split()]

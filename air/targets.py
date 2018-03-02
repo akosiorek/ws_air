@@ -68,7 +68,7 @@ def pynverse_find_alpha_impl(target_ess, weights):
     return np.float32(alpha)
 
 
-def pynverse_find_alpha(target_ess, log_weights):
+def alpha_for_ess(target_ess, log_weights):
     weights = tf.nn.softmax(log_weights)
     func = tf.py_func(pynverse_find_alpha_impl, [target_ess, weights], tf.float32)
     func.set_shape([])

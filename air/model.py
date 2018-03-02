@@ -156,7 +156,7 @@ class Model(object):
         self.log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
 
         self.importance_weights = tf.stop_gradient(tf.nn.softmax(self.log_weights, -1))
-        self.ess = tf.reduce_mean(tf.pow(tf.reduce_sum(self.importance_weights, -1), 2) / tf.reduce_sum(tf.pow(self.importance_weights, 2), -1))
+        self.ess = ops.ess(self.importance_weights, average=True)
         tf.summary.scalar('ess/value', self.ess)
 
         self.elbo_vae = tf.reduce_mean(self.log_weights)
@@ -189,10 +189,28 @@ class Model(object):
 
             if 'annealed' in self.target_arg.lower():
                 target_ess = float(self.target_arg.split('_')[-1]) * self.k_particles
-                self.alpha = targets.pynverse_find_alpha(target_ess, self.log_weights)
-                importance_weights = tf.nn.softmax(self.log_weights * self.alpha, -1)
+
+                self.alpha = tf.Variable(1., trainable=False)
+
+                alpha_ess = tf.exp(ops.log_ess(self.alpha * self.log_weights, average=True))
+
+                def exact():
+                    return targets.alpha_for_ess(target_ess, self.log_weights)
+
+                def inc():
+                    return (1. + self.alpha) / 2.
+
+                less = tf.less(alpha_ess, target_ess)
+                alpha_update = self.alpha.assign(tf.cond(less, exact, inc))
+                # tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, alpha_update)
+
+                # self.alpha = targets.alpha_for_ess(target_ess, self.log_weights)
+
+                with tf.control_dependencies([alpha_update]):
+                    importance_weights = tf.nn.softmax(self.log_weights * self.alpha, -1)
+
                 self.alpha_importance_weights = importance_weights
-                self.alpha_ess = tf.reduce_mean(tf.pow(tf.reduce_sum(importance_weights, -1), 2) / tf.reduce_sum(tf.pow(importance_weights, 2), -1))
+                self.alpha_ess = ops.ess(importance_weights, average=True)
                 tf.summary.scalar('ess/alpha_value', self.alpha_ess)
                 tf.summary.scalar('ess/alpha', self.alpha)
 
