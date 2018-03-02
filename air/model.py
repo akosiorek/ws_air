@@ -1,7 +1,6 @@
 import sonnet as snt
 import tensorflow as tf
-from tensorflow.contrib.distributions import Geometric
-from tensorflow.contrib.distributions import Normal
+import tensorflow.contrib.distributions as tfd
 
 import ops
 from cell import AIRCell
@@ -22,16 +21,16 @@ class AttendInferRepeat(snt.AbstractModule):
         self._cell = cell
 
         zeros = tf.zeros(self._cell.n_what)
-        self._what_prior = Normal(zeros, 1.)
+        self._what_prior = tfd.Normal(zeros, 1.)
 
         if recurrent_prior:
             with tf.variable_scope('attend_infer_repeat/air_decoder'):
                 self._where_prior = RecurrentNormal(self._cell.n_where, 10)
         else:
             zeros = tf.zeros(self._cell.n_where)
-            self._where_prior = Normal(zeros, 1.)
+            self._where_prior = tfd.Normal(zeros, 1.)
 
-        self._num_steps_prior = Geometric(probs=1 - prior_step_success_prob)
+        self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
 
         with self._enter_variable_scope():
             self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size,
@@ -49,7 +48,7 @@ class AttendInferRepeat(snt.AbstractModule):
 
         ho['canvas'] = canvas
         ho['glimpse'] = glimpse
-        ho['data_ll_per_pixel'] = Normal(canvas, self._output_std).log_prob(img)
+        ho['data_ll_per_pixel'] = tfd.Normal(canvas, self._output_std).log_prob(img)
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
 
         # Post-processing
@@ -119,9 +118,9 @@ class Model(object):
     """Generic AIRModel model"""
     output_std = 1.
     internal_decode = False
-    TARGETS = 'iwae rwrw rw+sleep rwrw+sleep ws'.split()
+    TARGETS = 'iwae w+s rw+s rw+rw rw+rws'.split()
 
-    def __init__(self, obs, model, k_particles, target, target_arg=None, num_objects=None, debug=False):
+    def __init__(self, obs, model, k_particles, target, target_arg=None, presence=None, debug=False):
         """
 
         :param obs:
@@ -136,7 +135,7 @@ class Model(object):
         self.target = target
         self.target_arg = target_arg
 
-        self.gt_num_objects = num_objects
+        self.gt_presence = presence
         self.debug = debug
 
         shape = self.obs.get_shape().as_list()
@@ -167,8 +166,8 @@ class Model(object):
         self.num_steps_per_example = self.outputs.num_steps
         self.num_steps = tf.reduce_mean(self.num_steps_per_example)
 
-        if self.gt_num_objects is not None:
-            self.gt_num_steps = tf.reduce_sum(self.gt_num_objects, -1)
+        if self.gt_presence is not None:
+            self.gt_num_steps = tf.reduce_sum(self.gt_presence, -1)
             # num_step_per_sample = self._resample(self.outputs.num_steps)
             num_step_per_sample = self.num_steps_per_example
             num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.k_particles))
@@ -197,10 +196,10 @@ class Model(object):
                 tf.summary.scalar('ess/alpha_value', self.alpha_ess)
                 tf.summary.scalar('ess/alpha', self.alpha)
 
-            if self.target == 'rwrw':
+            if self.target == 'rw+rw':
                 decoder_target, encoder_target = self._rwrw_targets(importance_weights)
 
-            elif self.target == 'rw+sleep':
+            elif self.target == 'rw+s':
                 decoder_target, _ = self._rwrw_targets(importance_weights)
 
                 sample = self.model.sample(self.batch_size)
@@ -209,7 +208,7 @@ class Model(object):
 
                 encoder_target = -tf.reduce_mean(sleep_outputs.log_q_z)
 
-            elif self.target == 'rwrw+sleep':
+            elif self.target == 'rw+rws':
                 decoder_target, encoder_wake_target = self._rwrw_targets(importance_weights)
 
                 sample = self.model.sample(self.batch_size)
@@ -219,7 +218,7 @@ class Model(object):
                 encoder_sleep_target = -tf.reduce_mean(sleep_outputs.log_q_z)
                 encoder_target = (encoder_sleep_target + encoder_wake_target) / 2.
 
-            elif self.target == 'ws':
+            elif self.target == 'w+s':
                 sample = self.model.sample(self.batch_size)
                 obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
                 sleep_outputs = self.model(obs, latent_override=[what, where, presence])

@@ -19,7 +19,7 @@ tf.flags.DEFINE_float('final_step_success_prob', 1e-5, '')
 tf.flags.DEFINE_float('step_success_prob', -1., 'in [0, 1.]; it\'s annealed from `init` to `final` if not set.')
 
 tf.flags.DEFINE_float('n_anneal_steps_loss', 1e3, '')
-tf.flags.DEFINE_integer('n_iw_samples', 5, '')
+tf.flags.DEFINE_integer('k_particles', 5, '')
 
 tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
 tf.flags.DEFINE_boolean('importance_resample', False, '')
@@ -32,7 +32,7 @@ tf.flags.DEFINE_string('transition', 'LSTM', '')
 
 tf.flags.DEFINE_float('output_std', .3, '')
 
-flags.DEFINE_string('target', 'iwae', 'choose from {}'.format(Model.TARGETS))
+flags.DEFINE_string('target', 'iwae', 'choose from: {}'.format(Model.TARGETS))
 
 
 def load(img, num, mean_img=None):
@@ -42,7 +42,7 @@ def load(img, num, mean_img=None):
     assert target in Model.TARGETS, 'Target is {} and not in {}'.format(F.target, Model.TARGETS)
 
     gradients_through_z = True
-    if target == 'rws+sleep':
+    if target != Model.TARGETS[0]:
         gradients_through_z = False
 
     glimpse_size = [20, 20]
@@ -76,5 +76,5 @@ def load(img, num, mean_img=None):
                             recurrent_prior=F.rec_prior,
                             )
 
-    model = Model(img, air, F.n_iw_samples, target=target, target_arg=F.target_arg, num_objects=num)
+    model = Model(img, air, F.k_particles, target=target, target_arg=F.target_arg, presence=num)
     return model

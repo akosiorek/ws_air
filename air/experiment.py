@@ -40,14 +40,13 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rwrw+sleep'
-    F.init_step_success_prob = .75
-    F.final_step_success_prob = .75
+    F.target = 'rw+rws'
+    F.step_success_prob = .75
     F.rec_prior = True
-    F.n_iw_samples = 5
+    F.k_particles = 5
     # F.target_arg = 'annealed_0.90'
 
-run_name = '{}_k={}_target={}'.format(F.run_name, F.n_iw_samples, F.target)
+run_name = '{}_k={}_target={}'.format(F.run_name, F.k_particles, F.target)
 if F.target_arg:
     run_name += '_{}'.format(F.target_arg)
 
