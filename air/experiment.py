@@ -40,11 +40,12 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rw+rw'
+    F.target = 'iwae'
     F.step_success_prob = .75
     # F.rec_prior = True
     F.k_particles = 5
-    F.target_arg = 'annealed_0.5'
+    # F.target_arg = 'annealed_0.5'
+    F.binary = True
 
 # Load Data and model
 data_dict = load_data(F.batch_size)

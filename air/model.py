@@ -13,11 +13,10 @@ class AttendInferRepeat(snt.AbstractModule):
     """Implements both the inference and the generative mdoel for AIRModel"""
 
     def __init__(self, n_steps, output_std, prior_step_success_prob, cell, glimpse_decoder,
-                 mean_img=None, recurrent_prior=False):
+                 mean_img=None, recurrent_prior=False, binary=False):
 
         super(AttendInferRepeat, self).__init__()
         self._n_steps = n_steps
-        self._output_std = output_std
         self._cell = cell
 
         zeros = tf.zeros(self._cell.n_what)
@@ -33,8 +32,12 @@ class AttendInferRepeat(snt.AbstractModule):
         self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
 
         with self._enter_variable_scope():
-            self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size,
-                                       glimpse_decoder, batch_dims=2, mean_img=mean_img)
+            self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size, glimpse_decoder,
+                                       batch_dims=2,
+                                       mean_img=mean_img,
+                                       output_std=output_std,
+                                       binary=binary
+                                       )
 
     def _build(self, img, latent_override=None):
         # Inference
@@ -44,11 +47,11 @@ class AttendInferRepeat(snt.AbstractModule):
 
         # Generation
         latents = [ho[i] for i in 'what where presence'.split()]
-        canvas, glimpse = self._decoder(*latents)
+        pdf_x_given_z, glimpse = self._decoder(*latents)
 
-        ho['canvas'] = canvas
+        ho['canvas'] = pdf_x_given_z.mean
         ho['glimpse'] = glimpse
-        ho['data_ll_per_pixel'] = tfd.Normal(canvas, self._output_std).log_prob(img)
+        ho['data_ll_per_pixel'] = pdf_x_given_z.log_prob(img)
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
 
         # Post-processing
@@ -110,7 +113,9 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.expand_dims(presence, -1)
 
         what, where, presence = ops.sort_by_distance_to_origin(what, where, presence)
-        obs, _ = self._decoder(what, where, presence)
+        pdf, _ = self._decoder(what, where, presence)
+        obs = pdf.sample()
+
         return obs, what, where, presence
 
 
@@ -120,7 +125,8 @@ class Model(object):
     internal_decode = False
     TARGETS = 'iwae w+s rw+s rw+rw rw+rws'.split()
 
-    def __init__(self, obs, model, k_particles, target, target_arg=None, presence=None, debug=False):
+    def __init__(self, obs, model, k_particles, target,
+                 target_arg=None, presence=None, binary=False, debug=False):
         """
 
         :param obs:
@@ -136,10 +142,14 @@ class Model(object):
         self.target_arg = target_arg
 
         self.gt_presence = presence
+        self.binary = binary
         self.debug = debug
 
         shape = self.obs.get_shape().as_list()
         self.batch_size = shape[0]
+
+        if self.binary:
+            self.obs = tfd.Bernoulli(probs=self.obs).sample()
 
         self.img_size = shape[1:]
         self.tiled_batch_size = self.batch_size * self.k_particles

@@ -2,7 +2,7 @@ import functools
 import numpy as np
 
 import tensorflow as tf
-from tensorflow.contrib.distributions import Normal
+import tensorflow.contrib.distributions as tfd
 from tensorflow.python.util import nest
 from tensorflow.contrib.resampler import resampler as tf_resampler
 
@@ -19,7 +19,7 @@ class ParametrisedGaussian(snt.AbstractModule):
         self._n_params = n_params
         self._loc_mult = loc_mult
         self._scale_offset = scale_offset
-        self._create_distrib = lambda x, y: Normal(x, tf.nn.softplus(y) + 1e-4, *args, **kwargs)
+        self._create_distrib = lambda x, y: tfd.Normal(x, tf.nn.softplus(y) + 1e-4, *args, **kwargs)
 
     def _build(self, inpt):
         transform = snt.Linear(2 * self._n_params)
@@ -155,11 +155,15 @@ class StepsPredictor(snt.AbstractModule):
 
 class AIRDecoder(snt.AbstractModule):
 
-    def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2, mean_img=None):
+    def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2,
+                 mean_img=None, output_std=0.3, binary=False):
+
         super(AIRDecoder, self).__init__()
         self._inverse_transformer = SpatialTransformer(img_size, glimpse_size, inverse=True)
         self._batch_dims = batch_dims
         self._mean_img = mean_img
+        self._output_std = output_std
+        self._binary = binary
 
         with self._enter_variable_scope():
             self._glimpse_decoder = glimpse_decoder(glimpse_size)
@@ -178,8 +182,17 @@ class AIRDecoder(snt.AbstractModule):
         inversed *= presence[..., tf.newaxis, tf.newaxis]
         canvas = tf.squeeze(tf.reduce_sum(inversed, axis=-4), -1)
 
+        non_zero_mask = tf.to_float(tf.not_equal(canvas, 0.))
         if self._mean_img is not None:
-            mask = tf.to_float(tf.not_equal(canvas, 0.))
-            canvas += self._mean_img * mask
+            canvas += self._mean_img * non_zero_mask
 
-        return canvas, glimpse
+        if self._binary:
+            mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
+            mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
+
+            canvas = canvas + non_zero_mask * mean_img_logit + (non_zero_mask - 1.) * 100.
+            pdf = tfd.Bernoulli(logits=canvas)
+        else:
+            pdf = tfd.Normal(canvas, self._output_std)
+
+        return pdf, glimpse
