@@ -13,7 +13,7 @@ class AttendInferRepeat(snt.AbstractModule):
     """Implements both the inference and the generative mdoel for AIRModel"""
 
     def __init__(self, n_steps, output_std, prior_step_success_prob, cell, glimpse_decoder,
-                 mean_img=None, recurrent_prior=False):
+                 mean_img=None, recurrent_prior=False, heteroscedastic=False):
 
         super(AttendInferRepeat, self).__init__()
         self._n_steps = n_steps
@@ -34,7 +34,9 @@ class AttendInferRepeat(snt.AbstractModule):
 
         with self._enter_variable_scope():
             self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size,
-                                       glimpse_decoder, batch_dims=2, mean_img=mean_img)
+                                       glimpse_decoder, self._output_std,
+                                       batch_dims=2, mean_img=mean_img,
+                                       heteroscedastic=heteroscedastic)
 
     def _build(self, img, latent_override=None):
         # Inference
@@ -44,11 +46,12 @@ class AttendInferRepeat(snt.AbstractModule):
 
         # Generation
         latents = [ho[i] for i in 'what where presence'.split()]
-        canvas, glimpse = self._decoder(*latents)
+        pdf_x_given_z, glimpse = self._decoder(*latents)
 
-        ho['canvas'] = canvas
+        ho['canvas'] = pdf_x_given_z.loc
+        ho['output_std'] = pdf_x_given_z.scale
         ho['glimpse'] = glimpse
-        ho['data_ll_per_pixel'] = tfd.Normal(canvas, self._output_std).log_prob(img)
+        ho['data_ll_per_pixel'] = pdf_x_given_z.log_prob(img)
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
 
         # Post-processing
@@ -110,7 +113,8 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.expand_dims(presence, -1)
 
         what, where, presence = ops.sort_by_distance_to_origin(what, where, presence)
-        obs, _ = self._decoder(what, where, presence)
+        pdf_x_given_z, _ = self._decoder(what, where, presence)
+        obs = pdf_x_given_z.sample()
         return obs, what, where, presence
 
 

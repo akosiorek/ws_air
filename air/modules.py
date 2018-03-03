@@ -2,7 +2,7 @@ import functools
 import numpy as np
 
 import tensorflow as tf
-from tensorflow.contrib.distributions import Normal
+import tensorflow.contrib.distributions as tfd
 from tensorflow.python.util import nest
 from tensorflow.contrib.resampler import resampler as tf_resampler
 
@@ -19,7 +19,7 @@ class ParametrisedGaussian(snt.AbstractModule):
         self._n_params = n_params
         self._loc_mult = loc_mult
         self._scale_offset = scale_offset
-        self._create_distrib = lambda x, y: Normal(x, tf.nn.softplus(y) + 1e-4, *args, **kwargs)
+        self._create_distrib = lambda x, y: tfd.Normal(x, tf.nn.softplus(y) + 1e-4, *args, **kwargs)
 
     def _build(self, inpt):
         transform = snt.Linear(2 * self._n_params)
@@ -155,11 +155,18 @@ class StepsPredictor(snt.AbstractModule):
 
 class AIRDecoder(snt.AbstractModule):
 
-    def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2, mean_img=None):
+    def __init__(self, img_size, glimpse_size, glimpse_decoder, std, batch_dims=2,
+                 mean_img=None, heteroscedastic=False):
+
         super(AIRDecoder, self).__init__()
         self._inverse_transformer = SpatialTransformer(img_size, glimpse_size, inverse=True)
+        self._std = std
         self._batch_dims = batch_dims
         self._mean_img = mean_img
+        self._heteroscedastic = heteroscedastic
+
+        if self._heteroscedastic:
+            glimpse_size = list(glimpse_size) + [2]
 
         with self._enter_variable_scope():
             self._glimpse_decoder = glimpse_decoder(glimpse_size)
@@ -176,10 +183,24 @@ class AIRDecoder(snt.AbstractModule):
 
         inversed = batch(self._inverse_transformer)(glimpse, logits=where)
         inversed *= presence[..., tf.newaxis, tf.newaxis]
-        canvas = tf.squeeze(tf.reduce_sum(inversed, axis=-4), -1)
+
+        canvas = tf.reduce_sum(inversed, axis=-4)
+        std = self._std
+
+        if self._heteroscedastic:
+            canvas, std_logit = tf.split(canvas, 2, -1)
+            std_logit = tf.squeeze(std_logit, -1)
+            # std_logit = tf.nn.softplus(std_logit - 1)
+            std_logit = tf.nn.softplus(std_logit - 1.75)
+            std_logit += tf.reduce_mean(std_logit, -1, keep_dims=True)
+
+            std += std_logit
+
+        canvas = tf.squeeze(canvas, -1)
 
         if self._mean_img is not None:
             mask = tf.to_float(tf.not_equal(canvas, 0.))
             canvas += self._mean_img * mask
 
-        return canvas, glimpse
+        pdf = tfd.Normal(canvas, std)
+        return pdf, glimpse

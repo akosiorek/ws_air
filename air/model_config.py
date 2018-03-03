@@ -25,6 +25,7 @@ tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
 tf.flags.DEFINE_boolean('importance_resample', False, '')
 
 tf.flags.DEFINE_boolean('rec_prior', False, '')
+tf.flags.DEFINE_boolean('heteroscedastic', False, '')
 tf.flags.DEFINE_string('target_arg', '', '')
 
 tf.flags.DEFINE_string('opt', '', '')
@@ -74,6 +75,7 @@ def load(img, num, mean_img=None):
     air = AttendInferRepeat(F.n_steps_per_image, F.output_std, step_success_prob,
                             air_cell, glimpse_decoder, mean_img=mean_img,
                             recurrent_prior=F.rec_prior,
+                            heteroscedastic=F.heteroscedastic
                             )
 
     model = Model(img, air, F.k_particles, target=target, target_arg=F.target_arg, presence=num)

@@ -40,11 +40,15 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rw+rw'
+    F.target = 'rw+rws'
     F.step_success_prob = .75
     # F.rec_prior = True
     F.k_particles = 5
-    F.target_arg = 'annealed_0.5'
+    # F.target_arg = 'annealed_0.5'
+    F.heteroscedastic = True
+    # F.heteroscedastic = False
+    if F.heteroscedastic:
+        F.output_std = 1e-2
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -112,7 +116,12 @@ if F.restore:
     saver.restore(sess, last_checkpoint)
 
 
-report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy]
+min_std = tf.reduce_min(model.outputs.output_std)
+mean_std = tf.reduce_mean(model.outputs.output_std)
+max_std = tf.reduce_max(model.outputs.output_std)
+std = [min_std, mean_std, max_std]
+
+report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy, min_std, mean_std, max_std]
 
 if 'annealed' in F.target_arg:
     report += [model.alpha, model.ess, model.alpha_ess]
