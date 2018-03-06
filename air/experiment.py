@@ -29,6 +29,7 @@ flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint i
 flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
 flags.DEFINE_boolean('eval_on_train', True, 'Evaluates on the train set if True')
 
+flags.DEFINE_float('clip_gradient', 0.0, 'clips gradient by global norm if nonzero')
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
 F = flags.FLAGS
@@ -40,12 +41,13 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'iwae'
+    F.target = 'w+s'
     F.step_success_prob = .75
-    # F.rec_prior = True
+    F.rec_prior = True
     F.k_particles = 5
     # F.target_arg = 'annealed_0.5'
     F.binary = True
+    F.clip_gradient = 1e-3
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -53,6 +55,8 @@ data_dict = load_data(F.batch_size)
 mean_img = data_dict.train_data.imgs.mean(0)
 model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=mean_img)
 
+num_params = sum([np.prod(v.shape.as_list()) for v in tf.trainable_variables()])
+print 'Number of trainable parameters:', num_params
 
 run_name = '{}_k={}_target={}'.format(F.run_name, F.k_particles, F.target)
 if F.target_arg:
@@ -65,7 +69,6 @@ if not os.path.exists(checkpoint_dir):
 
 save_flags(F, checkpoint_dir)
 checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
-
 
 # ELBO
 tf.summary.scalar('elbo/iwae', model.elbo_iwae)
@@ -80,6 +83,16 @@ opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
 # Optimisation target
 target, gvs = model.make_target(opt)
 tf.summary.scalar('target', target)
+
+gs = [gv[0] for gv in gvs]
+gradient_global_norm = tf.global_norm(gs, 'gradient_global_norm')
+tf.summary.scalar('gradient_norm', gradient_global_norm)
+
+if F.clip_gradient != 0.0:
+    # gs = map(lambda x: tf.clip_by_value(x, -1., 1.), gs)
+    threshold = F.clip_gradient * num_params
+    clipped_gs, _ = tf.clip_by_global_norm(gs, threshold, gradient_global_norm)
+    gvs = [(g, gv[1]) for g, gv in zip(clipped_gs, gvs)]
 
 update_ops = tf.get_collection(tf.GraphKeys.UPDATE_OPS)
 with tf.control_dependencies(update_ops):
@@ -113,7 +126,7 @@ if F.restore:
     saver.restore(sess, last_checkpoint)
 
 
-report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy]
+report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy, gradient_global_norm]
 
 if 'annealed' in F.target_arg:
     report += [model.alpha, model.ess, model.alpha_ess]

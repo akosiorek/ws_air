@@ -124,14 +124,20 @@ class AIRCell(snt.RNNCore):
         return [flat_img, what_code, where_code, init_presence, hidden_state]
 
     def _build(self, inpt, state):
-        """Input is unused; it's only to force a maximum number of steps"""
+        """
+
+        :param inpt: tuple of (boolean, [tf.Tensor] * 3); if the boolean is True, tensors are used as latent samples
+            (new latents are NOT sampled).
+        :param state: see self.initial_state
+        :return:
+        """
         img_flat, what, where, presence, hidden_state = state
         img = tf.reshape(img_flat, (-1,) + tuple(self._img_size))
 
-        override, latent_o = inpt
-        if not override:
-            latent_o = [None] * 3
-        what_o, where_o, presence_o = latent_o
+        do_reuse_samples, reuse_samples = inpt
+        if not do_reuse_samples:
+            reuse_samples = [None] * 3
+        what_o, where_o, presence_o = reuse_samples
 
         with tf.variable_scope('rnn_inpt'):
             rnn_inpt = self._input_encoder(img)
@@ -175,43 +181,49 @@ class AIRCell(snt.RNNCore):
 
         return output, new_state
 
-    def _compute_where(self, hidden_output, sample):
+    def _compute_where(self, hidden_output, reuse_sample):
         loc, scale = self._transform_estimator(hidden_output)
         scale = tf.nn.softplus(scale) + 1e-4
         where_distrib = Normal(loc, scale, validate_args=self._debug, allow_nan_stats=not self._debug)
-        sample, sample_log_prob = self._maybe_sample(where_distrib, sample)
+        sample, sample_log_prob = self._maybe_sample(where_distrib, reuse_sample)
         return sample, where_distrib.loc, where_distrib.scale, sample_log_prob
 
-    def _compute_presence(self, presence, hidden_output, sample):
+    def _compute_presence(self, presence, hidden_output, reuse_sample):
         presence_logit = self._steps_predictor(hidden_output)
 
         presence_distrib = Bernoulli(logits=presence_logit, dtype=tf.float32,
                                      validate_args=self._debug, allow_nan_stats=not self._debug)
-        new_presence, sample_log_prob = self._maybe_sample(presence_distrib, sample)
-        presence *= new_presence
+        new_presence, sample_log_prob = self._maybe_sample(presence_distrib, reuse_sample)
+        if new_presence != reuse_sample:
+            presence *= new_presence
+        else:
+            presence = new_presence
 
         return presence, presence_logit, sample_log_prob
 
-    def _compute_what(self, img, where_code, sample):
+    def _compute_what(self, img, where_code, reuse_sample):
 
         cropped = self._spatial_transformer(img, logits=where_code)
         flat_crop = snt.BatchFlatten()(cropped)
 
         what_params = self._glimpse_encoder(flat_crop)
         what_distrib = self._what_distrib(what_params)
-        sample, sample_log_prob = self._maybe_sample(what_distrib, sample)
+        sample, sample_log_prob = self._maybe_sample(what_distrib, reuse_sample)
         return sample, what_distrib.loc, what_distrib.scale, sample_log_prob
 
-    def _maybe_sample(self, distrib, sample=None):
-        """Take a sample from the pdf `distrib` is `sample` is not None. If `sample` is given, it is usead instead.
-        The method also evaluates the log probability of the sample and optionally blocks gradient flow through it.
+    def _maybe_sample(self, distrib, reuse_sample=None):
+        """Take a sample from the pdf `distrib` if `reuse_sample` is None. If `reuse_sample` is given, it is usead
+        instead. The method also evaluates the log probability of the sample and optionally blocks the gradient flow
+        through it.
 
         :param distrib: tf.Distribution
-        :param sample: tf.Tensor or None
-        :return: (tf.Tensor, tf.Tensor) representing a sample and its log probability
+        :param reuse_sample: tf.Tensor or None
+        :return: tuple of (tf.Tensor, tf.Tensor) representing a sample and its log probability
         """
-        if sample is None:
-            sample = distrib.sample()
+        if reuse_sample is None:
+            reuse_sample = distrib.sample()
+
         if not self._gradients_through_z:
-            sample = tf.stop_gradient(sample)
-        return sample, tf.reduce_sum(distrib.log_prob(sample), -1, keep_dims=True)
+            reuse_sample = tf.stop_gradient(reuse_sample)
+
+        return reuse_sample, tf.reduce_sum(distrib.log_prob(reuse_sample), -1, keep_dims=True)

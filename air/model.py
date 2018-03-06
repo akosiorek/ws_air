@@ -39,17 +39,17 @@ class AttendInferRepeat(snt.AbstractModule):
                                        binary=binary
                                        )
 
-    def _build(self, img, latent_override=None):
+    def _build(self, img, reuse_samples=None):
         # Inference
         # ho is hidden outputs; short name due to frequent usage
         initial_state = self._cell.initial_state(img)
-        ho, hidden_state = self._unroll_timestep(initial_state, latent_override)
+        ho, hidden_state = self._unroll_timestep(initial_state, reuse_samples)
 
         # Generation
         latents = [ho[i] for i in 'what where presence'.split()]
         pdf_x_given_z, glimpse = self._decoder(*latents)
 
-        ho['canvas'] = pdf_x_given_z.mean
+        ho['canvas'] = pdf_x_given_z.mean()
         ho['glimpse'] = glimpse
         ho['data_ll_per_pixel'] = pdf_x_given_z.log_prob(img)
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
@@ -80,16 +80,15 @@ class AttendInferRepeat(snt.AbstractModule):
 
         return ho
 
-    def _unroll_timestep(self, hidden_state, latents=None):
-        if latents is None:
+    def _unroll_timestep(self, hidden_state, reuse_samples=None):
+        if reuse_samples is None:
             inpt = [tf.zeros((1, 1))] * 3
             inpt = [[False, inpt]] * self._n_steps
         else:
-            latents = [tf.unstack(l, axis=-2) for l in latents]
-            latents = zip(*latents)
-            inpt = [[True, l] for l in latents]
+            reuse_samples = [tf.unstack(l, axis=-2) for l in reuse_samples]
+            reuse_samples = zip(*reuse_samples)
+            inpt = [[True, l] for l in reuse_samples]
 
-        # hidden_outputs, hidden_state = tf.nn.static_rnn(self._cell, inpt, hidden_state)
         hidden_outputs = []
         for i in inpt:
             ho, hidden_state = self._cell(i, hidden_state)
@@ -100,6 +99,7 @@ class AttendInferRepeat(snt.AbstractModule):
         return hidden_outputs, hidden_state[-1]
 
     def sample(self, sample_size=1):
+
         w = []
         for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
             sample = pdf.sample(arg)
@@ -123,7 +123,9 @@ class Model(object):
     """Generic AIRModel model"""
     output_std = 1.
     internal_decode = False
-    TARGETS = 'iwae w+s rw+s rw+rw rw+rws'.split()
+    VI_TARGETS = 'iwae reinforce'.split()
+    WS_TARGETS = 'w+s rw+s rw+rw rw+rws'.split()
+    TARGETS = VI_TARGETS + WS_TARGETS
 
     def __init__(self, obs, model, k_particles, target,
                  target_arg=None, presence=None, binary=False, debug=False):
@@ -148,8 +150,8 @@ class Model(object):
         shape = self.obs.get_shape().as_list()
         self.batch_size = shape[0]
 
-        if self.binary:
-            self.obs = tfd.Bernoulli(probs=self.obs).sample()
+        # if self.binary:
+        #     self.obs = tfd.Bernoulli(probs=self.obs).sample()
 
         self.img_size = shape[1:]
         self.tiled_batch_size = self.batch_size * self.k_particles
@@ -186,11 +188,15 @@ class Model(object):
 
     def make_target(self, opt):
 
-        if self.target == 'iwae':
-            target = targets.vimco(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
+        if self.target in self.VI_TARGETS:
+            if self.target == 'iwae':
+                target = targets.vimco(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
+            elif self.target == 'reinforce':
+                target = targets.reinforce(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
+
             gvs = opt.compute_gradients(target)
 
-        elif self.target in self.TARGETS[1:]:
+        elif self.target in self.WS_TARGETS:
             decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                              scope='attend_infer_repeat/air_decoder')
             encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
@@ -224,37 +230,26 @@ class Model(object):
                 tf.summary.scalar('ess/alpha_value', self.alpha_ess)
                 tf.summary.scalar('ess/alpha', self.alpha)
 
-            if self.target == 'rw+rw':
-                decoder_target, encoder_target = self._rwrw_targets(importance_weights)
+            if self.target == 'w+s':
+                decoder_target = -tf.reduce_mean(self.outputs.log_p_x_and_z)
+                encoder_target = self.sleep_encoder_target()
 
             elif self.target == 'rw+s':
-                decoder_target, _ = self._rwrw_targets(importance_weights)
+                decoder_target = self.wake_decoder_target(importance_weights)
+                encoder_target = self.sleep_encoder_target()
 
-                sample = self.model.sample(self.batch_size)
-                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
-                sleep_outputs = self.model(obs, latent_override=[what, where, presence])
-
-                encoder_target = -tf.reduce_mean(sleep_outputs.log_q_z)
+            elif self.target == 'rw+rw':
+                decoder_target = self.wake_decoder_target(importance_weights)
+                encoder_target = self.wake_encoder_target(importance_weights)
 
             elif self.target == 'rw+rws':
-                decoder_target, encoder_wake_target = self._rwrw_targets(importance_weights)
+                decoder_target = self.wake_decoder_target(importance_weights)
 
-                sample = self.model.sample(self.batch_size)
-                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
-                sleep_outputs = self.model(obs, latent_override=[what, where, presence])
+                encoder_wake_target = self.wake_encoder_target(importance_weights)
+                encoder_sleep_target = self.sleep_encoder_target()
+                encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
 
-                encoder_sleep_target = -tf.reduce_mean(sleep_outputs.log_q_z)
-                encoder_target = (encoder_sleep_target + encoder_wake_target) / 2.
-
-            elif self.target == 'w+s':
-                sample = self.model.sample(self.batch_size)
-                obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
-                sleep_outputs = self.model(obs, latent_override=[what, where, presence])
-
-                decoder_target = -tf.reduce_mean(self.outputs.log_p_x_and_z)
-                encoder_target = -tf.reduce_mean(sleep_outputs.log_q_z)
-
-            target = (decoder_target + encoder_target) / 2.
+            target = decoder_target + encoder_target
             decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
             encoder_gvs = opt.compute_gradients(encoder_target, var_list=encoder_vars)
             gvs = decoder_gvs + encoder_gvs
@@ -268,7 +263,30 @@ class Model(object):
 
         return target, gvs
 
-    def _rwrw_targets(self, imp_weights):
-        logpxz = tf.reshape(self.outputs.log_p_x_and_z, (self.batch_size, self.k_particles))
+    def sleep_encoder_target(self):
+        sample = self.model.sample(self.batch_size)
+        obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
+        sleep_outputs = self.model(obs, reuse_samples=[what, where, presence])
+        return -tf.reduce_mean(sleep_outputs.log_q_z)
+
+    def wake_encoder_target(self, imp_weights=None):
+        if imp_weights is None:
+            imp_weights = self.importance_weights
+
+        imp_weights = tf.stop_gradient(imp_weights)
         logqz = tf.reshape(self.outputs.log_q_z, (self.batch_size, self.k_particles))
-        return targets.reweighted_wake_wake(logpxz, logqz, imp_weights)
+
+        shape1, shape2 = logqz.shape.as_list(), imp_weights.shape.as_list()
+        assert shape1 == shape2, 'shapes are not equal: logqz = {} vs imp weight = {}'.format(shape1, shape2)
+        return -tf.reduce_mean(imp_weights * logqz * self.k_particles)
+
+    def wake_decoder_target(self, imp_weights=None):
+        if imp_weights is None:
+            imp_weights = self.importance_weights
+
+        imp_weights = tf.stop_gradient(imp_weights)
+        logpxz = tf.reshape(self.outputs.log_p_x_and_z, (self.batch_size, self.k_particles))
+
+        shape1, shape2 = logpxz.shape.as_list(), imp_weights.shape.as_list()
+        assert shape1 == shape2, 'shapes are not equal: logpxz = {} vs imp weight = {}'.format(shape1, shape2)
+        return -tf.reduce_mean(imp_weights * logpxz * self.k_particles)

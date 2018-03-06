@@ -171,28 +171,40 @@ class AIRDecoder(snt.AbstractModule):
                 self._mean_img = tf.Variable(self._mean_img, dtype=tf.float32, trainable=True)
                 self._mean_img = tf.expand_dims(self._mean_img, 0)
 
+
+            self._batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
+
     def to_coords(self, where_logits):
         return self._inverse_transformer.to_coords(where_logits)
 
-    def _build(self, what, where, presence):
-        batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
-        glimpse = batch(self._glimpse_decoder)(what)
-
-        inversed = batch(self._inverse_transformer)(glimpse, logits=where)
+    def _decode(self, glimpse, presence, where):
+        inversed = self._batch(self._inverse_transformer)(glimpse, logits=where)
         inversed *= presence[..., tf.newaxis, tf.newaxis]
-        canvas = tf.squeeze(tf.reduce_sum(inversed, axis=-4), -1)
+        return tf.squeeze(tf.reduce_sum(inversed, axis=-4), -1)
 
-        non_zero_mask = tf.to_float(tf.not_equal(canvas, 0.))
-        if self._mean_img is not None:
-            canvas += self._mean_img * non_zero_mask
+    def _build(self, what, where, presence):
+
+        glimpse = self._batch(self._glimpse_decoder)(what)
+        canvas = self._decode(glimpse, presence, where)
+
+        # non_zero_mask = tf.to_float(tf.not_equal(canvas, 0.))
+
+        ones = tf.ones_like(glimpse)
+        non_zero_mask = self._decode(ones, presence, where)
+        non_zero_mask = tf.nn.sigmoid(-10. + non_zero_mask * 20.)
 
         if self._binary:
-            mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
-            mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
+            if self._mean_img is not None:
+                mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
+                mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
 
-            canvas = canvas + non_zero_mask * mean_img_logit + (non_zero_mask - 1.) * 100.
-            pdf = tfd.Bernoulli(logits=canvas)
+                canvas = canvas + non_zero_mask * mean_img_logit + (non_zero_mask - 1.) * 100.
+            pdf = tfd.Bernoulli(logits=canvas, dtype=tf.float32)
+
         else:
+            if self._mean_img is not None:
+                canvas += self._mean_img * non_zero_mask
+
             pdf = tfd.Normal(canvas, self._output_std)
 
         return pdf, glimpse

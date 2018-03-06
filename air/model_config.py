@@ -43,7 +43,7 @@ def load(img, num, mean_img=None):
     assert target in Model.TARGETS, 'Target is {} and not in {}'.format(F.target, Model.TARGETS)
 
     gradients_through_z = True
-    if target != Model.TARGETS[0]:
+    if target in Model.WS_TARGETS:
         gradients_through_z = False
 
     glimpse_size = [20, 20]

@@ -1,6 +1,9 @@
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.distributions as tfd
+from tensorflow.python.ops.distributions import util as tfd_util
+from tensorflow.python.ops.distributions import distribution
+
 import sonnet as snt
 
 from ops import clip_preserve, sample_from_tensor, anneal_weight
@@ -164,7 +167,7 @@ class RecurrentNormalImpl(snt.AbstractModule):
         output, state = self._rnn(sample_m1, hidden_state)
         stats = self._readout(output)
         loc, scale = tf.split(stats, 2, -1)
-        scale = tf.nn.softplus(scale)
+        scale = tf.nn.softplus(scale) + 1e-4
         pdf = tfd.Normal(loc, scale)
 
         if sample is None:
@@ -192,6 +195,3 @@ class RecurrentNormal(object):
         sample_size, length = sample_size
         samples, _, _, _ = self._impl(batch_size=sample_size, seq_len=length)
         return samples
-
-
-
