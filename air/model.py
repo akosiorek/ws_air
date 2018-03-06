@@ -98,7 +98,7 @@ class AttendInferRepeat(snt.AbstractModule):
         hidden_outputs = AIRCell.outputs_by_name(hidden_outputs)
         return hidden_outputs, hidden_state[-1]
 
-    def sample(self, sample_size=1):
+    def sample(self, sample_size=1, mean=False):
 
         w = []
         for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
@@ -114,7 +114,11 @@ class AttendInferRepeat(snt.AbstractModule):
 
         what, where, presence = ops.sort_by_distance_to_origin(what, where, presence)
         pdf, _ = self._decoder(what, where, presence)
-        obs = pdf.sample()
+
+        if mean:
+            obs = pdf.mean()
+        else:
+            obs = pdf.sample()
 
         return obs, what, where, presence
 
@@ -128,7 +132,7 @@ class Model(object):
     TARGETS = VI_TARGETS + WS_TARGETS
 
     def __init__(self, obs, model, k_particles, target,
-                 target_arg=None, presence=None, binary=False, debug=False):
+                 target_arg=None, presence=None, binary=False, ws_annealing=None, ws_annealing_arg=None, debug=False):
         """
 
         :param obs:
@@ -145,6 +149,8 @@ class Model(object):
 
         self.gt_presence = presence
         self.binary = binary
+        self.ws_annealing = ws_annealing
+        self.ws_annealing_arg = ws_annealing_arg
         self.debug = debug
 
         shape = self.obs.get_shape().as_list()
@@ -186,7 +192,7 @@ class Model(object):
             gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
             self.num_step_accuracy = tf.reduce_mean(tf.to_float(tf.equal(gt_num_steps, num_step_per_sample)))
 
-    def make_target(self, opt):
+    def make_target(self, opt, n_train_itr=None):
 
         if self.target in self.VI_TARGETS:
             if self.target == 'iwae':
@@ -197,6 +203,7 @@ class Model(object):
             gvs = opt.compute_gradients(target)
 
         elif self.target in self.WS_TARGETS:
+
             decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                              scope='attend_infer_repeat/air_decoder')
             encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
@@ -247,7 +254,8 @@ class Model(object):
 
                 encoder_wake_target = self.wake_encoder_target(importance_weights)
                 encoder_sleep_target = self.sleep_encoder_target()
-                encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
+                encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr)
+                # encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
 
             target = decoder_target + encoder_target
             decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
@@ -290,3 +298,28 @@ class Model(object):
         shape1, shape2 = logpxz.shape.as_list(), imp_weights.shape.as_list()
         assert shape1 == shape2, 'shapes are not equal: logpxz = {} vs imp weight = {}'.format(shape1, shape2)
         return -tf.reduce_mean(imp_weights * logpxz * self.k_particles)
+
+    def annealed_wake_update(self, encoder_sleep_target, encoder_wake_target, n_train_itr=None):
+        if isinstance(self.ws_annealing, basestring):
+            self.ws_annealing = self.ws_annealing.lower()
+        elif self.ws_annealing is None:
+            self.ws_annealing = 'none'
+
+        if self.ws_annealing not in 'none linear exp'.split():
+            raise ValueError('Unknown value of ws_annealing = {}'.format(self.ws_annealing))
+
+        if self.ws_annealing == 'none':
+            alpha = 0.5
+        else:
+            assert n_train_itr is not None, 'n_train_itr cannot be None for wake-sleep annealing!'
+
+            global_step = tf.train.get_or_create_global_step()
+            progress = tf.to_float(global_step) / n_train_itr
+            if self.ws_annealing == 'linear':
+                alpha = 1. - 0.5 * progress
+
+            elif self.ws_annealing == 'exp':
+                c = self.ws_annealing_arg
+                alpha = 1. - 0.5 * tf.exp(c * (progress - 1.))
+
+        return alpha * encoder_wake_target + (1. - alpha) * encoder_sleep_target

@@ -33,6 +33,9 @@ tf.flags.DEFINE_string('transition', 'LSTM', '')
 
 tf.flags.DEFINE_float('output_std', .3, '')
 
+tf.flags.DEFINE_string('ws_annealing', 'none', 'choose from: exp, linear')
+tf.flags.DEFINE_float('ws_annealing_arg', 3.)
+
 flags.DEFINE_string('target', 'iwae', 'choose from: {}'.format(Model.TARGETS))
 
 
@@ -79,5 +82,5 @@ def load(img, num, mean_img=None):
                             )
 
     model = Model(img, air, F.k_particles, target=target, target_arg=F.target_arg, presence=num,
-                  binary=F.binary)
+                  binary=F.binary, ws_annealing=F.ws_annealing, ws_annealing_arg=F.ws_annealing_arg)
     return model

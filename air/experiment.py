@@ -41,13 +41,15 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'w+s'
+    F.target = 'rw+rws'
     F.step_success_prob = .75
     F.rec_prior = True
     F.k_particles = 5
     # F.target_arg = 'annealed_0.5'
     F.binary = True
     F.clip_gradient = 1e-3
+    F.ws_annealing = 'exp'
+    F.ws_annealing_arg = 3.
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -81,7 +83,7 @@ global_step = tf.train.get_or_create_global_step()
 opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
 
 # Optimisation target
-target, gvs = model.make_target(opt)
+target, gvs = model.make_target(opt, n_train_itr=F.train_itr)
 tf.summary.scalar('target', target)
 
 gs = [gv[0] for gv in gvs]
