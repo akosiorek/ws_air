@@ -48,12 +48,12 @@ if F.test_run:
     F.rec_prior = True
     F.k_particles = 5
     # F.target_arg = 'annealed_0.5'
-    F.input_type = 'logit'
-    F.output_std = 1.
+    F.input_type = 'binary'
+    # F.output_std = 1.
     F.clip_gradient = 1e-3
-    # F.ws_annealing = 'linear'
-    F.ws_annealing_arg = 3.
-    F.schedule = True
+    F.ws_annealing = 'dist'
+    # F.ws_annealing_arg = 3.
+    # F.schedule = True
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -141,6 +141,9 @@ if F.restore:
 
 
 report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy, gradient_global_norm]
+
+if 'ws_annealing' == 'dist':
+    report += [model.anneal_alpha, model.dist]
 
 if 'annealed' in F.target_arg:
     report += [model.alpha, model.ess, model.alpha_ess]

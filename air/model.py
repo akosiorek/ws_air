@@ -187,7 +187,7 @@ class Model(object):
         self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
         self.num_steps_per_example = self.outputs.num_steps
-        self.num_steps = tf.reduce_mean(self.num_steps_per_example)
+        self.num_steps = self._imp_weighted_mean(self.num_steps_per_example)
 
         if self.gt_presence is not None:
             self.gt_num_steps = tf.reduce_sum(self.gt_presence, -1)
@@ -195,7 +195,9 @@ class Model(object):
             num_step_per_sample = self.num_steps_per_example
             num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.k_particles))
             gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
-            self.num_step_accuracy = tf.reduce_mean(tf.to_float(tf.equal(gt_num_steps, num_step_per_sample)))
+
+            acc = tf.to_float(tf.equal(gt_num_steps, num_step_per_sample))
+            self.num_step_accuracy = self._imp_weighted_mean(acc)
 
     def make_target(self, opt, n_train_itr=None, l2_reg=0.):
 
@@ -204,7 +206,6 @@ class Model(object):
                 target = targets.vimco(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
             elif self.target == 'reinforce':
                 target = targets.reinforce(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
-
 
             target += self._l2_reg(l2_reg)
             gvs = opt.compute_gradients(target)
@@ -260,8 +261,10 @@ class Model(object):
                 decoder_target = self.wake_decoder_target(importance_weights)
 
                 encoder_wake_target = self.wake_encoder_target(importance_weights)
-                encoder_sleep_target = self.sleep_encoder_target()
-                encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr)
+                encoder_sleep_target, sleep_outputs = self.sleep_encoder_target(True)
+
+                encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr,
+                                                           sleep_outputs)
                 # encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
 
             l2_reg = self._l2_reg(l2_reg)
@@ -282,11 +285,15 @@ class Model(object):
 
         return target, gvs
 
-    def sleep_encoder_target(self):
+    def sleep_encoder_target(self, return_sleep_outputs=False):
         sample = self.model.sample(self.batch_size)
         obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
         sleep_outputs = self.model(obs, reuse_samples=[what, where, presence])
-        return -tf.reduce_mean(sleep_outputs.log_q_z)
+        target = -tf.reduce_mean(sleep_outputs.log_q_z)
+        if return_sleep_outputs:
+            target = target, sleep_outputs
+
+        return target
 
     def wake_encoder_target(self, imp_weights=None):
         if imp_weights is None:
@@ -310,13 +317,13 @@ class Model(object):
         assert shape1 == shape2, 'shapes are not equal: logpxz = {} vs imp weight = {}'.format(shape1, shape2)
         return -tf.reduce_mean(imp_weights * logpxz * self.k_particles)
 
-    def annealed_wake_update(self, encoder_sleep_target, encoder_wake_target, n_train_itr=None):
+    def annealed_wake_update(self, encoder_sleep_target, encoder_wake_target, n_train_itr=None, sleep_outputs=None):
         if isinstance(self.ws_annealing, basestring):
             self.ws_annealing = self.ws_annealing.lower()
         elif self.ws_annealing is None:
             self.ws_annealing = 'none'
 
-        if self.ws_annealing not in 'none linear exp'.split():
+        if self.ws_annealing not in 'none linear exp dist'.split():
             raise ValueError('Unknown value of ws_annealing = {}'.format(self.ws_annealing))
 
         if self.ws_annealing == 'none':
@@ -332,7 +339,15 @@ class Model(object):
             elif self.ws_annealing == 'exp':
                 c = self.ws_annealing_arg
                 alpha = 1. - 0.5 * tf.exp(c * (progress - 1.))
+            elif self.ws_annealing == 'dist':
+                assert sleep_outputs is not None
+                wake_logqz = self._imp_weighted_mean(self.outputs.log_q_z)
+                sleep_logqz = tf.reduce_mean(sleep_outputs.log_q_z)
+                distance = abs(wake_logqz - sleep_logqz)
+                alpha = 1. - tf.exp(-distance)
+                alpha = tf.stop_gradient(alpha)
 
+        self.dist = distance
         self.anneal_alpha = alpha
         return alpha * encoder_wake_target + (1. - alpha) * encoder_sleep_target
 
@@ -342,4 +357,6 @@ class Model(object):
 
         return weight * sum(map(tf.nn.l2_loss, tf.trainable_variables()))
 
-
+    def _imp_weighted_mean(self, tensor):
+        tensor = tf.reshape(tensor, (self.batch_size, self.k_particles))
+        return tf.reduce_mean(self.importance_weights * tensor * self.k_particles)
