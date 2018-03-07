@@ -142,7 +142,7 @@ if F.restore:
 
 report = [model.elbo_iwae, model.num_steps, model.num_step_accuracy, gradient_global_norm]
 
-if 'ws_annealing' == 'dist':
+if F.ws_annealing == 'dist':
     report += [model.anneal_alpha, model.dist]
 
 if 'annealed' in F.target_arg:
