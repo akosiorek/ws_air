@@ -156,14 +156,15 @@ class StepsPredictor(snt.AbstractModule):
 class AIRDecoder(snt.AbstractModule):
 
     def __init__(self, img_size, glimpse_size, glimpse_decoder, batch_dims=2,
-                 mean_img=None, output_std=0.3, binary=False):
+                 mean_img=None, output_std=0.3, output_type='normal'):
 
         super(AIRDecoder, self).__init__()
+        self._glimpse_size = glimpse_size
         self._inverse_transformer = SpatialTransformer(img_size, glimpse_size, inverse=True)
         self._batch_dims = batch_dims
         self._mean_img = mean_img
         self._output_std = output_std
-        self._binary = binary
+        self._output_type = output_type
 
         with self._enter_variable_scope():
             self._glimpse_decoder = glimpse_decoder(glimpse_size)
@@ -171,6 +172,8 @@ class AIRDecoder(snt.AbstractModule):
                 self._mean_img = tf.Variable(self._mean_img, dtype=tf.float32, trainable=True)
                 self._mean_img = tf.expand_dims(self._mean_img, 0)
 
+                if self._output_type == 'logit':
+                    self.learnable_canvas = tf.Variable(tf.zeros_like(self._mean_img), dtype=tf.float32, trainable=True)
 
             self._batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
 
@@ -186,25 +189,35 @@ class AIRDecoder(snt.AbstractModule):
 
         glimpse = self._batch(self._glimpse_decoder)(what)
         canvas = self._decode(glimpse, presence, where)
+        canvas = self._add_mean_image(canvas, presence, where)
 
-        # non_zero_mask = tf.to_float(tf.not_equal(canvas, 0.))
-
-        ones = tf.ones_like(glimpse)
-        non_zero_mask = self._decode(ones, presence, where)
-        non_zero_mask = tf.nn.sigmoid(-10. + non_zero_mask * 20.)
-
-        if self._binary:
-            if self._mean_img is not None:
-                mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
-                mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
-
-                canvas = canvas + non_zero_mask * mean_img_logit + (non_zero_mask - 1.) * 100.
+        if self._output_type == 'binary':
             pdf = tfd.Bernoulli(logits=canvas, dtype=tf.float32)
 
-        else:
-            if self._mean_img is not None:
-                canvas += self._mean_img * non_zero_mask
-
+        elif self._output_type in 'normal logit'.split():
             pdf = tfd.Normal(canvas, self._output_std)
 
         return pdf, glimpse
+
+    def _add_mean_image(self, canvas, presence, where):
+        if self._mean_img is None:
+            return canvas
+
+        ones = tf.ones(where.shape.as_list()[:2] + list(self._glimpse_size))
+        non_zero_mask = self._decode(ones, presence, where)
+        non_zero_mask = tf.nn.sigmoid(-10. + non_zero_mask * 20.)
+
+        if self._output_type in 'binary logit'.split():
+            mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
+            mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
+
+            canvas += non_zero_mask * mean_img_logit
+            if self._output_type == 'binary':
+                 canvas += (non_zero_mask - 1.) * 100.
+            else:
+                canvas += (non_zero_mask - 1.) * self.learnable_canvas
+
+        elif self._output_type == 'normal':
+            canvas += self._mean_img * non_zero_mask
+
+        return canvas

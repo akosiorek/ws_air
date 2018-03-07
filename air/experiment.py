@@ -23,6 +23,7 @@ flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between m
 flags.DEFINE_integer('eval_itr', int(5e3), 'Number of iterations between log p(x) is estimated')
 
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
+tf.flags.DEFINE_float('l2', 0.0, 'Weight for the l2 regularisation of parameters')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
@@ -46,9 +47,10 @@ if F.test_run:
     F.rec_prior = True
     F.k_particles = 5
     # F.target_arg = 'annealed_0.5'
-    F.binary = True
+    F.input_type = 'logit'
+    F.output_std = 1.
     F.clip_gradient = 1e-3
-    F.ws_annealing = 'exp'
+    # F.ws_annealing = 'linear'
     F.ws_annealing_arg = 3.
 
 # Load Data and model
@@ -83,7 +85,7 @@ global_step = tf.train.get_or_create_global_step()
 opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
 
 # Optimisation target
-target, gvs = model.make_target(opt, n_train_itr=F.train_itr)
+target, gvs = model.make_target(opt, n_train_itr=F.train_itr, l2_reg=F.l2)
 tf.summary.scalar('target', target)
 
 gs = [gv[0] for gv in gvs]

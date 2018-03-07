@@ -13,7 +13,7 @@ class AttendInferRepeat(snt.AbstractModule):
     """Implements both the inference and the generative mdoel for AIRModel"""
 
     def __init__(self, n_steps, output_std, prior_step_success_prob, cell, glimpse_decoder,
-                 mean_img=None, recurrent_prior=False, binary=False):
+                 mean_img=None, recurrent_prior=False, output_type='normal'):
 
         super(AttendInferRepeat, self).__init__()
         self._n_steps = n_steps
@@ -36,7 +36,7 @@ class AttendInferRepeat(snt.AbstractModule):
                                        batch_dims=2,
                                        mean_img=mean_img,
                                        output_std=output_std,
-                                       binary=binary
+                                       output_type=output_type
                                        )
 
     def _build(self, img, reuse_samples=None):
@@ -130,9 +130,10 @@ class Model(object):
     VI_TARGETS = 'iwae reinforce'.split()
     WS_TARGETS = 'w+s rw+s rw+rw rw+rws'.split()
     TARGETS = VI_TARGETS + WS_TARGETS
+    INPUT_TYPES = 'normal binary logit'.split()
 
     def __init__(self, obs, model, k_particles, target,
-                 target_arg=None, presence=None, binary=False, ws_annealing=None, ws_annealing_arg=None, debug=False):
+                 target_arg=None, presence=None, input_type='normal', ws_annealing=None, ws_annealing_arg=None, debug=False):
         """
 
         :param obs:
@@ -148,7 +149,7 @@ class Model(object):
         self.target_arg = target_arg
 
         self.gt_presence = presence
-        self.binary = binary
+        self.input_type = input_type
         self.ws_annealing = ws_annealing
         self.ws_annealing_arg = ws_annealing_arg
         self.debug = debug
@@ -156,8 +157,12 @@ class Model(object):
         shape = self.obs.get_shape().as_list()
         self.batch_size = shape[0]
 
-        # if self.binary:
-        #     self.obs = tfd.Bernoulli(probs=self.obs).sample()
+        if self.input_type == 'binary':
+            self.obs = tfd.Bernoulli(probs=self.obs).sample()
+
+        elif self.input_type == 'logit':
+            obs = tf.clip_by_value(obs, 1e-4, 1. - 1e-4)
+            self.obs = tf.log(obs / (1. - obs))
 
         self.img_size = shape[1:]
         self.tiled_batch_size = self.batch_size * self.k_particles
@@ -192,7 +197,7 @@ class Model(object):
             gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
             self.num_step_accuracy = tf.reduce_mean(tf.to_float(tf.equal(gt_num_steps, num_step_per_sample)))
 
-    def make_target(self, opt, n_train_itr=None):
+    def make_target(self, opt, n_train_itr=None, l2_reg=0.):
 
         if self.target in self.VI_TARGETS:
             if self.target == 'iwae':
@@ -200,6 +205,8 @@ class Model(object):
             elif self.target == 'reinforce':
                 target = targets.reinforce(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
 
+
+            target += self._l2_reg(l2_reg)
             gvs = opt.compute_gradients(target)
 
         elif self.target in self.WS_TARGETS:
@@ -256,6 +263,10 @@ class Model(object):
                 encoder_sleep_target = self.sleep_encoder_target()
                 encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr)
                 # encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
+
+            l2_reg = self._l2_reg(l2_reg)
+            decoder_target += l2_reg
+            encoder_target += l2_reg
 
             target = decoder_target + encoder_target
             decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
@@ -322,4 +333,13 @@ class Model(object):
                 c = self.ws_annealing_arg
                 alpha = 1. - 0.5 * tf.exp(c * (progress - 1.))
 
+        self.anneal_alpha = alpha
         return alpha * encoder_wake_target + (1. - alpha) * encoder_sleep_target
+
+    def _l2_reg(self, weight):
+        if weight == 0.:
+            return 0.
+
+        return weight * sum(map(tf.nn.l2_loss, tf.trainable_variables()))
+
+
