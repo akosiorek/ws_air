@@ -16,14 +16,15 @@ flags.DEFINE_string('run_name', 'run', 'Folder in which all run information is s
 
 flags.DEFINE_integer('batch_size', 32, '')
 
-flags.DEFINE_integer('train_itr', int(1e6), 'Number of training iterations')
+flags.DEFINE_integer('train_itr', int(2e6), 'Number of training iterations')
 flags.DEFINE_integer('log_itr', int(1e3), 'Number of iterations between logs')
 flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better reporting minibatch loss - hearbeat')
 flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
 flags.DEFINE_integer('eval_itr', int(5e3), 'Number of iterations between log p(x) is estimated')
 
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
-tf.flags.DEFINE_float('l2', 0.0, 'Weight for the l2 regularisation of parameters')
+flags.DEFINE_float('l2', 0.0, 'Weight for the l2 regularisation of parameters')
+flags.DEFINE_boolean('schedule', False, 'Uses a learning rate schedule if True')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
@@ -52,6 +53,7 @@ if F.test_run:
     F.clip_gradient = 1e-3
     # F.ws_annealing = 'linear'
     F.ws_annealing_arg = 3.
+    F.schedule = True
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -82,7 +84,15 @@ tf.summary.scalar('steps/accuracy', model.num_step_accuracy)
 
 # Training setup
 global_step = tf.train.get_or_create_global_step()
-opt = tf.train.RMSPropOptimizer(F.learning_rate, momentum=.9)
+n_iters_per_epoch = data_dict['train_data'].imgs.shape[0] // F.batch_size
+
+lr = F.learning_rate
+if F.schedule:
+    boundary_itr = [int(i * 1e5) for i in (2, 8)]
+    lrs = [lr, lr / 3.33, lr / 10.]
+    learning_rate = tf.train.piecewise_constant(global_step, boundary_itr, lrs)
+
+opt = tf.train.RMSPropOptimizer(lr, momentum=.9)
 
 # Optimisation target
 target, gvs = model.make_target(opt, n_train_itr=F.train_itr, l2_reg=F.l2)
