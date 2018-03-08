@@ -115,7 +115,8 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.to_float(tf.sequence_mask(n, maxlen=self._n_steps))
         presence = tf.expand_dims(presence, -1)
 
-        latents = ops.sort_by_distance_to_origin(what, where, presence)
+        latents = [what, where, presence]
+        latents = ops.sort_by_distance_to_origin(*latents)
         if k_particles > 1:
             latents = [ops.tile_input_for_iwae(i, k_particles) for i in latents]
 
@@ -352,8 +353,8 @@ class Model(object):
                 distance = abs(wake_logqz - sleep_logqz)
                 alpha = 1. - tf.exp(-distance)
                 alpha = tf.stop_gradient(alpha)
+                self.dist = distance
 
-        self.dist = distance
         self.anneal_alpha = alpha
         return alpha * encoder_wake_target + (1. - alpha) * encoder_sleep_target
 
