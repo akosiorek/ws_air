@@ -116,7 +116,7 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.expand_dims(presence, -1)
 
         latents = [what, where, presence]
-        latents = ops.sort_by_distance_to_origin(*latents)
+        #latents = ops.sort_by_distance_to_origin(*latents)
         if k_particles > 1:
             latents = [ops.tile_input_for_iwae(i, k_particles) for i in latents]
 
