@@ -16,6 +16,7 @@ class AIRCell(snt.RNNCore):
                     ' presence_logit presence_log_prob'.split()
     _what_loc_mult = 1.
     _what_scale_bias = 0.
+    _initial_state = None
 
     _latent_name_to_idx = dict(
         what=0,
@@ -26,7 +27,7 @@ class AIRCell(snt.RNNCore):
 
     def __init__(self, img_size, glimpse_size, n_what,
                  rnn, input_encoder, glimpse_encoder, transform_estimator, steps_predictor,
-                 decoder=None, gradients_through_z=True,
+                 gradients_through_z=True,
                  debug=False):
         """Creates the cell
 
@@ -49,7 +50,6 @@ class AIRCell(snt.RNNCore):
         self._rnn = rnn
         self._n_hidden = int(self._rnn.output_size[0])
 
-        self._decoder = decoder
         self._gradients_through_z = gradients_through_z
         self._debug = debug
 
@@ -111,17 +111,21 @@ class AIRCell(snt.RNNCore):
     def initial_state(self, img, hidden_state=None):
         batch_size = img.get_shape().as_list()[0]
 
-        if hidden_state is None:
+        if self._initial_state is None:
+            # if hidden_state is None:
             hidden_state = self._rnn.initial_state(batch_size, tf.float32, trainable=True)
 
-        where_code = tf.zeros([1, self._n_transform_param], dtype=tf.float32, name='where_init')
-        what_code = tf.zeros([1, self._n_what], dtype=tf.float32, name='what_init')
+            where_code = tf.zeros([1, self._n_transform_param], dtype=tf.float32, name='where_init')
+            what_code = tf.zeros([1, self._n_what], dtype=tf.float32, name='what_init')
 
-        where_code, what_code = (tf.tile(i, (batch_size, 1)) for i in (where_code, what_code))
+            where_code, what_code = (tf.tile(i, (batch_size, 1)) for i in (where_code, what_code))
+
+
+            init_presence = tf.ones((batch_size, 1), dtype=tf.float32)
+            self._initial_state = [what_code, where_code, init_presence, hidden_state]
 
         flat_img = tf.reshape(img, (batch_size, self._n_pix))
-        init_presence = tf.ones((batch_size, 1), dtype=tf.float32)
-        return [flat_img, what_code, where_code, init_presence, hidden_state]
+        return [flat_img] + self._initial_state
 
     def _build(self, inpt, state):
         """
@@ -141,20 +145,9 @@ class AIRCell(snt.RNNCore):
 
         with tf.variable_scope('rnn_inpt'):
             rnn_inpt = self._input_encoder(img)
-            rnn_inpt = [rnn_inpt]
-
-            if self._decoder is not None:
-                rnn_inpt += [what, where, presence]
-
-            if len(rnn_inpt) > 1:
-                rnn_inpt = tf.concat(rnn_inpt, -1)
-            else:
-                rnn_inpt = rnn_inpt[0]
-
-            if self._decoder is None:
-                hidden_output, hidden_state = self._rnn(rnn_inpt, hidden_state)
-            else:
-                hidden_output = MLP([self._n_hidden] * 2, name='transition_MLP')(rnn_inpt)
+            rnn_inpt = [rnn_inpt, what, where, presence]
+            rnn_inpt = tf.concat(rnn_inpt, -1)
+            hidden_output, hidden_state = self._rnn(rnn_inpt, hidden_state)
 
         with tf.variable_scope('where'):
             where, where_loc, where_scale, where_log_prob = self._compute_where(hidden_output, where_o)
@@ -165,11 +158,6 @@ class AIRCell(snt.RNNCore):
 
         with tf.variable_scope('what'):
             what, what_loc, what_scale, what_log_prob = self._compute_what(img, where, what_o)
-
-        if self._decoder is not None:
-            params = [tf.expand_dims(i, 1) for i in (what, where, presence)]
-            reconstruction, _ = self._decoder(*params)
-            img_flat -= tf.reshape(reconstruction, tf.shape(img_flat))
 
         output = [
             what, what_loc, what_scale, what_log_prob,
@@ -194,10 +182,7 @@ class AIRCell(snt.RNNCore):
         presence_distrib = Bernoulli(logits=presence_logit, dtype=tf.float32,
                                      validate_args=self._debug, allow_nan_stats=not self._debug)
         new_presence, sample_log_prob = self._maybe_sample(presence_distrib, reuse_sample)
-        if new_presence != reuse_sample:
-            presence *= new_presence
-        else:
-            presence = new_presence
+        presence *= new_presence
 
         return presence, presence_logit, sample_log_prob
 

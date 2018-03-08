@@ -43,7 +43,7 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rw+rws'
+    F.target = 'rw+s'
     F.step_success_prob = .75
     F.rec_prior = True
     F.k_particles = 5
@@ -51,7 +51,7 @@ if F.test_run:
     F.input_type = 'binary'
     # F.output_std = 1.
     F.clip_gradient = 1e-3
-    F.ws_annealing = 'dist'
+    # F.ws_annealing = 'dist'
     # F.ws_annealing_arg = 3.
     # F.schedule = True
 

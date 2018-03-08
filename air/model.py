@@ -44,6 +44,7 @@ class AttendInferRepeat(snt.AbstractModule):
         # ho is hidden outputs; short name due to frequent usage
         initial_state = self._cell.initial_state(img)
         ho, hidden_state = self._unroll_timestep(initial_state, reuse_samples)
+        ho['hidden_state'] = hidden_state
 
         # Generation
         latents = [ho[i] for i in 'what where presence'.split()]
@@ -56,7 +57,7 @@ class AttendInferRepeat(snt.AbstractModule):
 
         # Post-processing
         num_steps_posterior = NumStepsDistribution(logits=ho.presence_logit[..., 0])
-        ho['num_steps'] = tf.reduce_sum(ho.presence[..., 0], -1)
+        ho['num_steps'] = tf.reduce_sum(tf.squeeze(ho.presence, -1), -1)
         ho['steps_log_prob'] = num_steps_posterior.log_prob(ho.num_steps)
         ho['steps_prior_log_prob'] = self._num_steps_prior.log_prob(ho.num_steps)
 
@@ -81,6 +82,7 @@ class AttendInferRepeat(snt.AbstractModule):
         return ho
 
     def _unroll_timestep(self, hidden_state, reuse_samples=None):
+
         if reuse_samples is None:
             inpt = [tf.zeros((1, 1))] * 3
             inpt = [[False, inpt]] * self._n_steps
@@ -90,6 +92,7 @@ class AttendInferRepeat(snt.AbstractModule):
             inpt = [[True, l] for l in reuse_samples]
 
         hidden_outputs = []
+
         for i in inpt:
             ho, hidden_state = self._cell(i, hidden_state)
             hidden_outputs.append(ho)
@@ -98,7 +101,7 @@ class AttendInferRepeat(snt.AbstractModule):
         hidden_outputs = AIRCell.outputs_by_name(hidden_outputs)
         return hidden_outputs, hidden_state[-1]
 
-    def sample(self, sample_size=1, mean=False):
+    def sample(self, sample_size=1, k_particles=1, mean=False):
 
         w = []
         for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
@@ -112,15 +115,18 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.to_float(tf.sequence_mask(n, maxlen=self._n_steps))
         presence = tf.expand_dims(presence, -1)
 
-        what, where, presence = ops.sort_by_distance_to_origin(what, where, presence)
-        pdf, _ = self._decoder(what, where, presence)
+        latents = ops.sort_by_distance_to_origin(what, where, presence)
+        if k_particles > 1:
+            latents = [ops.tile_input_for_iwae(i, k_particles) for i in latents]
+
+        pdf, _ = self._decoder(*latents)
 
         if mean:
             obs = pdf.mean()
         else:
             obs = pdf.sample()
 
-        return obs, what, where, presence
+        return [obs] + latents
 
 
 class Model(object):
@@ -286,7 +292,7 @@ class Model(object):
         return target, gvs
 
     def sleep_encoder_target(self, return_sleep_outputs=False):
-        sample = self.model.sample(self.batch_size)
+        sample = self.model.sample(self.batch_size, self.k_particles)
         obs, what, where, presence = (tf.stop_gradient(i) for i in sample)
         sleep_outputs = self.model(obs, reuse_samples=[what, where, presence])
         target = -tf.reduce_mean(sleep_outputs.log_q_z)
