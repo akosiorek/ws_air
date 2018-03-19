@@ -2,7 +2,7 @@ import tensorflow as tf
 import sonnet as snt
 from functools import partial
 
-from modules import Encoder, Decoder, StochasticTransformParam, StepsPredictor, AIRDecoder
+from modules import Encoder, Decoder, StochasticTransformParam, StepsPredictor
 from cell import AIRCell
 from model import AttendInferRepeat
 from model import Model
@@ -35,7 +35,24 @@ tf.flags.DEFINE_float('ws_annealing_arg', 3., '')
 flags.DEFINE_string('target', 'iwae', 'choose from: {}'.format(Model.TARGETS))
 
 
-def load(img, num, mean_img=None):
+def add_debug_logs(model):
+    o = model.outputs
+
+    with tf.name_scope('debug'):
+        logs = [k for k in o if 'log_prob' in k]
+        logs.append('data_ll')
+        for k in logs:
+            print 'histogram', k
+            tf.summary.histogram(k, o[k])
+
+        tf.summary.scalar('canvas/max', tf.reduce_max(o.canvas))
+        tf.summary.scalar('canvas/min', tf.reduce_min(o.canvas))
+
+        tf.summary.scalar('data_ll/max', tf.reduce_max(o.data_ll_per_pixel))
+        tf.summary.scalar('data_ll/min', tf.reduce_min(o.data_ll_per_pixel))
+
+
+def load(img, num, mean_img=None, debug=False):
     F = tf.flags.FLAGS
 
     target = F.target.lower()
@@ -81,4 +98,8 @@ def load(img, num, mean_img=None):
 
     model = Model(img, air, F.k_particles, target=target, target_arg=F.target_arg, presence=num,
                   input_type=F.input_type, ws_annealing=F.ws_annealing, ws_annealing_arg=F.ws_annealing_arg)
+
+    if debug:
+        add_debug_logs(model)
+
     return model

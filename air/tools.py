@@ -158,3 +158,64 @@ def make_expr_logger(sess, writer, num_batches, expr_dict, name, data_dict=None,
 
     return logger
 
+
+def log_ratio(var_tuple, name='ratio', eps=1e-8):
+    """
+    :param var_tuple:
+    :param name:
+    :param which_name:
+    :param eps:
+    :return:
+    """
+    a, b = var_tuple
+    ratio = tf.reduce_mean(abs(a) / (abs(b) + eps))
+    tf.summary.scalar(name, ratio)
+
+
+def log_norm(expr_list, name):
+    """
+    :param expr_list:
+    :param name:
+    :return:
+    """
+    n_elems = 0
+    norm = 0.
+    for e in nest.flatten(expr_list):
+        n_elems += tf.reduce_prod(tf.shape(e))
+        norm += tf.reduce_sum(e**2)
+    norm /= tf.to_float(n_elems)
+    tf.summary.scalar(name, norm)
+    return norm
+
+
+def gradient_summaries(gvs, norm=True, ratio=True, histogram=True):
+    """Register gradient summaries.
+    Logs the global norm of the gradient, ratios of gradient_norm/uariable_norm and
+    histograms of gradients.
+    :param gvs: list of (gradient, variable) tuples
+    :param norm: boolean, logs norm of the gradient if True
+    :param ratio: boolean, logs ratios if True
+    :param histogram: boolean, logs gradient histograms if True
+    """
+
+    with tf.name_scope('grad_summary'):
+        grad_norm = None
+        if isinstance(norm, tf.Tensor):
+            grad_norm = norm
+        elif norm:
+            grad_norm = tf.global_norm([gv[0] for gv in gvs])
+
+        if grad_norm:
+            tf.summary.scalar('grad_norm', grad_norm)
+
+        for g, v in gvs:
+            var_name = v.name.split(':')[0]
+            if g is None:
+                print 'Gradient for variable {} is None'.format(var_name)
+                continue
+
+            if ratio:
+                log_ratio((g, v), '/'.join(('grad_ratio', var_name)))
+
+            if histogram:
+                tf.summary.histogram('/'.join(('grad_hist', var_name)), g)

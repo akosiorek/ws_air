@@ -6,7 +6,7 @@ import tensorflow as tf
 
 from model_config import load as load_model
 from data_config import load as load_data
-from tools import save_flags, get_session, make_logger
+from tools import save_flags, get_session, make_logger, gradient_summaries
 
 flags = tf.flags
 
@@ -28,11 +28,14 @@ flags.DEFINE_boolean('schedule', False, 'Uses a learning rate schedule if True')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
-flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
 flags.DEFINE_boolean('eval_on_train', True, 'Evaluates on the train set if True')
 
 flags.DEFINE_float('clip_gradient', 0.0, 'clips gradient by global norm if nonzero')
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
+
+
+flags.DEFINE_boolean('tfdbg', False, 'Attaches the tf debugger to the session (and has_inf_or_nan_filter)')
+flags.DEFINE_boolean('debug', False, 'Adds a lot of summaries if True')
 
 F = flags.FLAGS
 os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
@@ -54,12 +57,13 @@ if F.test_run:
     # F.ws_annealing = 'dist'
     # F.ws_annealing_arg = 3.
     # F.schedule = True
+    F.debug = True
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
 
 mean_img = data_dict.train_data.imgs.mean(0)
-model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=mean_img)
+model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=mean_img, debug=F.debug)
 
 num_params = sum([np.prod(v.shape.as_list()) for v in tf.trainable_variables()])
 print 'Number of trainable parameters:', num_params
@@ -102,8 +106,11 @@ gs = [gv[0] for gv in gvs]
 gradient_global_norm = tf.global_norm(gs, 'gradient_global_norm')
 tf.summary.scalar('gradient_norm', gradient_global_norm)
 
+if F.debug:
+    gradient_summaries(gvs, norm=False)
+
+
 if F.clip_gradient != 0.0:
-    # gs = map(lambda x: tf.clip_by_value(x, -1., 1.), gs)
     threshold = F.clip_gradient * num_params
     clipped_gs, _ = tf.clip_by_global_norm(gs, threshold, gradient_global_norm)
     gvs = [(g, gv[1]) for g, gv in zip(clipped_gs, gvs)]
