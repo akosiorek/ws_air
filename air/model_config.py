@@ -35,15 +35,29 @@ tf.flags.DEFINE_float('ws_annealing_arg', 3., '')
 flags.DEFINE_string('target', 'iwae', 'choose from: {}'.format(Model.TARGETS))
 
 
+def choose_present(presence, tensor):
+    n_entries = tf.reduce_prod(presence.shape)
+    mask = tf.reshape(presence, [n_entries])
+    mask = tf.cast(mask, bool)
+    flat = tf.reshape(tensor, (n_entries, -1))
+    return tf.boolean_mask(flat, mask)
+
+
 def add_debug_logs(model):
     o = model.outputs
+    p = o.presence
 
     with tf.name_scope('debug'):
-        logs = [k for k in o if 'log_prob' in k]
-        logs.append('data_ll')
-        for k in logs:
-            print 'histogram', k
-            tf.summary.histogram(k, o[k])
+        for k, v in o.iteritems():
+            if 'what' in k or 'where' in k or ('presence' in k and k != 'presence'):
+                print 'histogram', k
+                v = choose_present(p, v)
+                tf.summary.histogram(k, v)
+                tf.summary.scalar(k + '/mean', tf.reduce_mean(v))
+                tf.summary.scalar(k + '/max', tf.reduce_max(v))
+                tf.summary.scalar(k + '/min', tf.reduce_min(v))
+
+        tf.summary.histogram('data_ll', o.data_ll)
 
         tf.summary.scalar('canvas/max', tf.reduce_max(o.canvas))
         tf.summary.scalar('canvas/min', tf.reduce_min(o.canvas))

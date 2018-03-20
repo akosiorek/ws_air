@@ -166,18 +166,23 @@ print sess.run(report)
 if train_itr == 0:
     evaluate(train_itr)
 
+tensors = [report, global_step, train_step]
+tensors_with_summary = tensors + [summary_op]
+
 while train_itr < F.train_itr:
-    l, train_itr, _ = sess.run([report, global_step, train_step])
+
+    if train_itr % F.log_itr == 0 and summary_op is not None:
+        l, train_itr, _, summary = sess.run(tensors_with_summary)
+        summary_writer.add_summary(summary, train_itr)
+    else:
+        l, train_itr, _ = sess.run(tensors)
+
     if train_itr % F.report_loss_every == 0:
         print train_itr, l
 
     if np.isnan(l).any():
         print 'NaN in reports; breaking...'
         sys.exit(1)
-
-    if train_itr % F.log_itr == 0 and summary_op is not None:
-        summary = sess.run(summary_op)
-        summary_writer.add_summary(summary, train_itr)
 
     if train_itr > 0 and train_itr % F.snapshot_itr == 0:
         saver.save(sess, checkpoint_path, global_step=train_itr)
