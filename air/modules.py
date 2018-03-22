@@ -192,6 +192,8 @@ class AIRDecoder(snt.AbstractModule):
         canvas = self._add_mean_image(canvas, presence, where)
 
         if self._output_type == 'binary':
+            # clip logits for numerical stability
+            canvas = tf.clip_by_value(canvas, -88., 16.)
             pdf = tfd.Bernoulli(logits=canvas, dtype=tf.float32)
 
         elif self._output_type in 'normal logit'.split():

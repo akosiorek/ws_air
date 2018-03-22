@@ -48,22 +48,32 @@ def add_debug_logs(model):
     p = o.presence
 
     with tf.name_scope('debug'):
-        for k, v in o.iteritems():
-            if 'what' in k or 'where' in k or ('presence' in k and k != 'presence'):
-                print 'histogram', k
-                v = choose_present(p, v)
-                tf.summary.histogram(k, v)
-                tf.summary.scalar(k + '/mean', tf.reduce_mean(v))
-                tf.summary.scalar(k + '/max', tf.reduce_max(v))
-                tf.summary.scalar(k + '/min', tf.reduce_min(v))
+
+        filter = lambda k: 'what' in k or 'where' in k or ('presence' in k and k != 'presence')
+        tensors = {k: o[k] for k in o if filter(k)}
+        where_tensors = {}
+        for k, v in tensors.items():
+            if 'where' in k:
+                for i, vv in enumerate(tf.unstack(v, axis=-1)):
+                    where_tensors[k + '_{}'.format(i)] = vv
+                del tensors[k]
+
+        tensors.update(where_tensors)
+
+        for k, v in tensors.iteritems():
+            print 'histogram', k
+            v = choose_present(p, v)
+            tf.summary.histogram(k, v)
+            tf.summary.scalar(k + '/mean', tf.reduce_mean(v))
+            tf.summary.scalar(k + '/max', tf.reduce_max(v))
+            tf.summary.scalar(k + '/min', tf.reduce_min(v))
 
         tf.summary.histogram('data_ll', o.data_ll)
 
-        tf.summary.scalar('canvas/max', tf.reduce_max(o.canvas))
-        tf.summary.scalar('canvas/min', tf.reduce_min(o.canvas))
-
-        tf.summary.scalar('data_ll/max', tf.reduce_max(o.data_ll_per_pixel))
-        tf.summary.scalar('data_ll/min', tf.reduce_min(o.data_ll_per_pixel))
+        for k in 'canvas data_ll data_ll_per_pixel'.split():
+            tf.summary.scalar(k + '/max', tf.reduce_max(o[k]))
+            tf.summary.scalar(k + '/mean', tf.reduce_mean(o[k]))
+            tf.summary.scalar(k + '/min', tf.reduce_min(o[k]))
 
 
 def load(img, num, mean_img=None, debug=False):

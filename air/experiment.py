@@ -22,6 +22,7 @@ flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better
 flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
 flags.DEFINE_integer('eval_itr', int(5e3), 'Number of iterations between log p(x) is estimated')
 
+flags.DEFINE_string('opt', 'rmsprop', 'choose from rmsprop, adam, sgd, momentum')
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
 flags.DEFINE_float('l2', 0.0, 'Weight for the l2 regularisation of parameters')
 flags.DEFINE_boolean('schedule', False, 'Uses a learning rate schedule if True')
@@ -58,6 +59,7 @@ if F.test_run:
     # F.ws_annealing_arg = 3.
     # F.schedule = True
     F.debug = True
+    F.opt = 'adam'
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -96,7 +98,16 @@ if F.schedule:
     lrs = [lr, lr / 3.33, lr / 10.]
     learning_rate = tf.train.piecewise_constant(global_step, boundary_itr, lrs)
 
-opt = tf.train.RMSPropOptimizer(lr, momentum=.9)
+opt = F.opt.lower()
+if opt == 'rmsprop':
+    opt = tf.train.RMSPropOptimizer(lr, momentum=.9)
+elif opt == 'adam':
+    opt = tf.train.AdamOptimizer(lr)
+elif opt == 'sgd':
+    opt = tf.train.GradientDescentOptimizer(lr)
+elif opt == 'momentum':
+    opt = tf.train.MomentumOptimizer(lr, momentum=.9)
+
 
 # Optimisation target
 target, gvs = model.make_target(opt, n_train_itr=F.train_itr, l2_reg=F.l2)
