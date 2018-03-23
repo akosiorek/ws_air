@@ -72,6 +72,7 @@ class AttendInferRepeat(snt.AbstractModule):
         pres = ho.presence
         log_p_z = ho.what_prior_log_prob + ho.where_prior_log_prob
         log_p_z = tf.squeeze(tf.reduce_sum(log_p_z * pres, -2), -1) + ho.steps_prior_log_prob
+        ho['log_p_z'] = log_p_z
         ho['log_p_x_and_z'] = ho.data_ll + log_p_z
 
         log_q_z = ho.what_log_prob + ho.where_log_prob
@@ -101,10 +102,10 @@ class AttendInferRepeat(snt.AbstractModule):
         hidden_outputs = AIRCell.outputs_by_name(hidden_outputs)
         return hidden_outputs, hidden_state[-1]
 
-    def sample(self, sample_size=1, k_particles=1, mean=False):
-
+    def sample_p_z(self, sample_size=1, k_tiles=1):
         w = []
-        for pdf, arg in zip((self._what_prior, self._where_prior), ([sample_size * self._n_steps], [sample_size, self._n_steps])):
+        for pdf, arg in zip((self._what_prior, self._where_prior),
+                            ([sample_size * self._n_steps], [sample_size, self._n_steps])):
             sample = pdf.sample(arg)
             shape = [sample_size, self._n_steps] + sample.shape.as_list()[-1:]
             sample = tf.reshape(sample, shape)
@@ -116,10 +117,14 @@ class AttendInferRepeat(snt.AbstractModule):
         presence = tf.expand_dims(presence, -1)
 
         latents = [what, where, presence]
-        #latents = ops.sort_by_distance_to_origin(*latents)
-        if k_particles > 1:
-            latents = [ops.tile_input_for_iwae(i, k_particles) for i in latents]
+        if k_tiles > 1:
+            latents = [ops.tile_input_for_iwae(i, k_tiles) for i in latents]
 
+        return latents
+
+    def sample(self, sample_size=1, k_particles=1, mean=False):
+
+        latents = self.sample_p_z(sample_size, k_particles)
         pdf, _ = self._decoder(*latents)
 
         if mean:
@@ -135,7 +140,7 @@ class Model(object):
     output_std = 1.
     internal_decode = False
     VI_TARGETS = 'iwae reinforce'.split()
-    WS_TARGETS = 'w+s rw+s rw+rw rw+rws'.split()
+    WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw'.split()
     TARGETS = VI_TARGETS + WS_TARGETS
     INPUT_TYPES = 'normal binary logit'.split()
 
@@ -264,6 +269,10 @@ class Model(object):
                 decoder_target = self.wake_decoder_target(importance_weights)
                 encoder_target = self.wake_encoder_target(importance_weights)
 
+            elif self.target == 'rw+mrw':
+                decoder_target = self.wake_decoder_target(importance_weights)
+                encoder_target = self.mixture_wake_encoder_target()
+
             elif self.target == 'rw+rws':
                 decoder_target = self.wake_decoder_target(importance_weights)
 
@@ -312,6 +321,32 @@ class Model(object):
         shape1, shape2 = logqz.shape.as_list(), imp_weights.shape.as_list()
         assert shape1 == shape2, 'shapes are not equal: logqz = {} vs imp weight = {}'.format(shape1, shape2)
         return -tf.reduce_mean(imp_weights * logqz * self.k_particles)
+
+    def mixture_wake_encoder_target(self):
+        alpha = 0.01
+
+        z_from_prior = self.model.sample_p_z(self.batch_size * self.k_particles)
+        z_from_q = [self.outputs.what, self.outputs.where, self.outputs.presence]
+        u = tf.random_uniform([self.batch_size * self.k_particles])
+        from_q = tf.greater_equal(u, alpha)
+
+        zs = []
+        for zp, zq in zip(z_from_prior, z_from_q):
+            z = tf.where(from_q, zq, zp)
+            zs.append(z)
+
+        o = self.model(self.tiled_obs, reuse_samples=zs)
+
+        logpxz = o.log_p_x_and_z
+        logpz = tf.expand_dims(o.log_p_z, -1) + tf.log(alpha)
+        logqz = tf.expand_dims(o.log_q_z, -1) + tf.log(1. - alpha)
+
+        logpz_and_logqz = tf.concat([logpz, logqz], -1)
+        logpz_and_logqz = tf.reduce_logsumexp(logpz_and_logqz, -1)
+        log_weights = logpxz - logpz_and_logqz
+        log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
+        imp_weights = tf.nn.softmax(log_weights, -1)
+        return self.wake_encoder_target(imp_weights)
 
     def wake_decoder_target(self, imp_weights=None):
         if imp_weights is None:
