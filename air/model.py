@@ -140,7 +140,7 @@ class Model(object):
     output_std = 1.
     internal_decode = False
     VI_TARGETS = 'iwae reinforce'.split()
-    WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw'.split()
+    WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw'.split()
     TARGETS = VI_TARGETS + WS_TARGETS
     INPUT_TYPES = 'normal binary logit'.split()
 
@@ -273,6 +273,10 @@ class Model(object):
                 decoder_target = self.wake_decoder_target(importance_weights)
                 encoder_target = self.mixture_wake_encoder_target()
 
+            elif self.target == 'rw+regrw':
+                decoder_target = self.wake_decoder_target(importance_weights)
+                encoder_target = self.reg_wake_encoder_target()
+
             elif self.target == 'rw+rws':
                 decoder_target = self.wake_decoder_target(importance_weights)
 
@@ -323,7 +327,8 @@ class Model(object):
         return -tf.reduce_mean(imp_weights * logqz * self.k_particles)
 
     def mixture_wake_encoder_target(self):
-        alpha = 0.01
+        F = tf.flags.FLAGS
+        alpha = F.alpha
 
         z_from_prior = self.model.sample_p_z(self.batch_size * self.k_particles)
         z_from_q = [self.outputs.what, self.outputs.where, self.outputs.presence]
@@ -347,6 +352,15 @@ class Model(object):
         log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
         imp_weights = tf.nn.softmax(log_weights, -1)
         return self.wake_encoder_target(imp_weights)
+
+    def reg_wake_encoder_target(self):
+        F = tf.flags.FLAGS
+        alpha = F.alpha
+
+        z_from_prior = self.model.sample_p_z(self.batch_size * self.k_particles)
+        o = self.model(self.tiled_obs, reuse_samples=z_from_prior)
+        prior_target = -tf.reduce_mean(o.log_q_z)
+        return alpha * prior_target + (1. - alpha) * self.wake_encoder_target()
 
     def wake_decoder_target(self, imp_weights=None):
         if imp_weights is None:
