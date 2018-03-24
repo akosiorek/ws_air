@@ -140,7 +140,7 @@ class Model(object):
     output_std = 1.
     internal_decode = False
     VI_TARGETS = 'iwae reinforce'.split()
-    WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw'.split()
+    WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw rw+entrw'.split()
     TARGETS = VI_TARGETS + WS_TARGETS
     INPUT_TYPES = 'normal binary logit'.split()
 
@@ -277,6 +277,10 @@ class Model(object):
                 decoder_target = self.wake_decoder_target(importance_weights)
                 encoder_target = self.reg_wake_encoder_target()
 
+            elif self.target == 'rw+entrw':
+                decoder_target = self.wake_decoder_target(importance_weights)
+                encoder_target = self.entropy_wake_encoder_target()
+
             elif self.target == 'rw+rws':
                 decoder_target = self.wake_decoder_target(importance_weights)
 
@@ -361,6 +365,20 @@ class Model(object):
         o = self.model(self.tiled_obs, reuse_samples=z_from_prior)
         prior_target = -tf.reduce_mean(o.log_q_z)
         return alpha * prior_target + (1. - alpha) * self.wake_encoder_target()
+
+    def entropy_wake_encoder_target(self):
+        F = tf.flags.FLAGS
+        alpha = F.alpha
+
+        z_from_prior = self.model.sample_p_z(self.batch_size * self.k_particles)
+        o = self.model(self.tiled_obs, reuse_samples=z_from_prior)
+        logqz = o.log_q_z
+        logpz = tf.stop_gradient(o.log_p_z)
+        entropy_log_weight = logqz - logpz
+        entropy_imp_weight = tf.nn.softmax(entropy_log_weight)
+        entropy_target = -tf.reduce_mean(entropy_imp_weight * logqz * self.k_particles)
+
+        return alpha * entropy_target + (1. - alpha) * self.wake_encoder_target()
 
     def wake_decoder_target(self, imp_weights=None):
         if imp_weights is None:
