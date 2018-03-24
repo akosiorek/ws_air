@@ -174,6 +174,8 @@ class AIRDecoder(snt.AbstractModule):
 
                 if self._output_type == 'logit':
                     self.learnable_canvas = tf.Variable(tf.zeros_like(self._mean_img), dtype=tf.float32, trainable=True)
+                elif self._output_type == 'binary':
+                    self.learnable_canvas = tf.Variable(tf.ones_like(self._mean_img) * 88, dtype=tf.float32, trainable=True)
 
             self._batch = functools.partial(snt.BatchApply, n_dims=self._batch_dims)
 
@@ -213,11 +215,7 @@ class AIRDecoder(snt.AbstractModule):
             mean_img_logit = tf.clip_by_value(self._mean_img, 1e-4, 1. - 1e-4)
             mean_img_logit = tf.log(mean_img_logit / (1. - mean_img_logit))
 
-            canvas += non_zero_mask * mean_img_logit
-            if self._output_type == 'binary':
-                 canvas += (non_zero_mask - 1.) * 100.
-            else:
-                canvas += (non_zero_mask - 1.) * self.learnable_canvas
+            canvas += non_zero_mask * mean_img_logit + (non_zero_mask - 1.) * self.learnable_canvas
 
         elif self._output_type == 'normal':
             canvas += self._mean_img * non_zero_mask
