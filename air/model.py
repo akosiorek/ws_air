@@ -32,8 +32,9 @@ class AttendInferRepeat(snt.AbstractModule):
         # self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
         with tf.variable_scope('attend_infer_repeat/air_decoder'):
             zeros = [0.] * (self._n_steps + 1)
-            step_logits = tf.Variable(zeros)
-            self._num_steps_prior = tfd.Categorical(logits=tf.expand_dims(step_logits, 0))
+            # zeros = tf.random_normal(shape=[self._n_steps + 1])
+            step_logits = tf.Variable(zeros, trainable=True, dtype=tf.float32, name='step_prior_log_probs')
+            self._num_steps_prior = tfd.Categorical(logits=step_logits)
 
         with self._enter_variable_scope():
             self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size, glimpse_decoder,
@@ -113,13 +114,9 @@ class AttendInferRepeat(snt.AbstractModule):
 
         F = tf.flags.FLAGS
         if F.clip_sleep >= 0:
-            print 'clip_sleep', F.clip_sleep
             n = tf.clip_by_value(n, 0., F.clip_sleep)
 
-        n = tf.squeeze(n, -1)
-        print 'n', n
         squeezed_presence = tf.sequence_mask(n, maxlen=self._n_steps, dtype=tf.float32)
-        print 'squeezed_p', squeezed_presence
         presence = tf.expand_dims(squeezed_presence, -1)
 
         w = []
@@ -218,7 +215,6 @@ class Model(object):
 
         if self.gt_presence is not None:
             self.gt_num_steps = tf.reduce_sum(self.gt_presence, -1)
-            # num_step_per_sample = self._resample(self.outputs.num_steps)
             num_step_per_sample = self.num_steps_per_example
             num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.k_particles))
             gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
@@ -229,10 +225,12 @@ class Model(object):
     def make_target(self, opt, n_train_itr=None, l2_reg=0.):
 
         if self.target in self.VI_TARGETS:
-            if self.target == 'iwae':
-                target = targets.vimco(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
-            elif self.target == 'reinforce':
-                target = targets.reinforce(self.log_weights, self.outputs.steps_log_prob, self.elbo_iwae_per_example)
+            if self.target in 'iwae reinforce'.split():
+                log_probs = self.outputs.steps_log_prob + self.outputs.steps_prior_log_prob
+                if self.target == 'iwae':
+                    target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
+                elif self.target == 'reinforce':
+                    target = targets.reinforce(self.log_weights, log_probs, self.elbo_iwae_per_example)
 
             target += self._l2_reg(l2_reg)
             gvs = opt.compute_gradients(target)
@@ -304,7 +302,6 @@ class Model(object):
 
                 encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr,
                                                            sleep_outputs)
-                # encoder_target = (encoder_wake_target + encoder_sleep_target) / 2.
 
             l2_reg = self._l2_reg(l2_reg)
             decoder_target += l2_reg
@@ -314,7 +311,6 @@ class Model(object):
             decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
             encoder_gvs = opt.compute_gradients(encoder_target, var_list=encoder_vars)
             gvs = decoder_gvs + encoder_gvs
-
         else:
             raise ValueError('Invalid target: {}'.format(self.target))
 
