@@ -127,8 +127,9 @@ def geom_success_prob(init_step_success_prob, final_step_success_prob):
 
 
 class RecurrentNormalImpl(snt.AbstractModule):
+    _cond_state = None
 
-    def __init__(self, n_dim, n_hidden):
+    def __init__(self, n_dim, n_hidden, conditional=False):
         super(RecurrentNormalImpl, self).__init__()
         self._n_dim = n_dim
         self._n_hidden = n_hidden
@@ -139,10 +140,18 @@ class RecurrentNormalImpl(snt.AbstractModule):
             self._init_state = self._rnn.initial_state(1, trainable=True)
             self._init_sample = tf.zeros((1, self._n_hidden))
 
-    def _build(self, batch_size=1, seq_len=1, override_samples=None):
+            if conditional:
+                self._cond_state = snt.Sequential([snt.Linear(self._n_hidden), tf.nn.elu])
+
+    def _build(self, batch_size=1, seq_len=1, override_samples=None, conditioning=None):
 
         s = self._init_sample, self._init_state
         sample, state = (tf.tile(ss, (batch_size, 1)) for ss in s)
+
+        if conditioning is not None:
+            assert self._cond_state is not None, 'This distribution is unconditional. Pass conditional=True in init!'
+            state = tf.concat((state, conditioning), -1)
+            state = self._cond_state(state)
 
         outputs = [[] for _ in xrange(4)]
         if override_samples is not None:
@@ -167,7 +176,7 @@ class RecurrentNormalImpl(snt.AbstractModule):
         output, state = self._rnn(sample_m1, hidden_state)
         stats = self._readout(output)
         loc, scale = tf.split(stats, 2, -1)
-        scale = tf.nn.softplus(scale) + 1e-4
+        scale = tf.nn.softplus(scale) + 1e-2
         pdf = tfd.Normal(loc, scale)
 
         if sample is None:
@@ -178,20 +187,35 @@ class RecurrentNormalImpl(snt.AbstractModule):
 
 class RecurrentNormal(object):
 
-    def __init__(self, n_dim, n_hidden):
-        self._impl = RecurrentNormalImpl(n_dim, n_hidden)
+    def __init__(self, n_dim, n_hidden, conditional=False):
+        self._impl = RecurrentNormalImpl(n_dim, n_hidden, conditional)
 
-    def log_prob(self, samples):
+    def log_prob(self, samples, conditioning=None):
         batch_size = samples.shape.as_list()[0]
-        _, _, _, logprob = self._impl(batch_size=batch_size, override_samples=samples)
+        _, _, _, logprob = self._impl(batch_size=batch_size, override_samples=samples, conditioning=conditioning)
         return logprob
 
-    def sample(self, sample_size=(1, 1)):
+    def sample(self, sample_size=(1, 1), conditioning=None):
         """
 
         :param sample_size: tuple of (num samples, seq_length)
         :return:
         """
         sample_size, length = sample_size
-        samples, _, _, _ = self._impl(batch_size=sample_size, seq_len=length)
+        samples, _, _, _ = self._impl(batch_size=sample_size, seq_len=length, conditioning=conditioning)
         return samples
+
+
+class ConditionedNormalAdaptor(tfd.Normal):
+
+    def log_prob(self, *args, **kwargs):
+        if 'conditioning' in kwargs:
+            del kwargs['conditioning']
+
+        return super(ConditionedNormalAdaptor, self).log_prob(*args, **kwargs)
+
+    def sample(self, *args, **kwargs):
+        if 'conditioning' in kwargs:
+            del kwargs['conditioning']
+
+        return super(ConditionedNormalAdaptor, self).sample(*args, **kwargs)

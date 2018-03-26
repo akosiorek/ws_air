@@ -171,13 +171,14 @@ class AIRCell(snt.RNNCore):
 
     def _compute_where(self, hidden_output, reuse_sample):
         loc, scale = self._transform_estimator(hidden_output)
-        scale = tf.nn.softplus(scale) + 1e-4
+        scale = tf.nn.softplus(scale) + 1e-2
         where_distrib = Normal(loc, scale, validate_args=self._debug, allow_nan_stats=not self._debug)
         sample, sample_log_prob = self._maybe_sample(where_distrib, reuse_sample)
         return sample, where_distrib.loc, where_distrib.scale, sample_log_prob
 
     def _compute_presence(self, presence, hidden_output, reuse_sample):
         presence_logit = self._steps_predictor(hidden_output)
+        presence_logit = presence * presence_logit + (presence - 1.) * 88.
 
         presence_distrib = Bernoulli(logits=presence_logit, dtype=tf.float32,
                                      validate_args=self._debug, allow_nan_stats=not self._debug)

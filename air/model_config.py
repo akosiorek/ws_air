@@ -24,11 +24,13 @@ tf.flags.DEFINE_integer('k_particles', 5, '')
 tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
 tf.flags.DEFINE_string('input_type', Model.INPUT_TYPES[0], 'Choose from: {}'.format(Model.INPUT_TYPES))
 
-tf.flags.DEFINE_boolean('rec_prior', False, '')
+tf.flags.DEFINE_boolean('rec_prior', True, '')
 tf.flags.DEFINE_string('target_arg', '', '')
 
 tf.flags.DEFINE_float('output_std', .3, '')
 tf.flags.DEFINE_float('alpha', 0.0, 'an optimisation parameter; might be unused')
+
+tf.flags.DEFINE_integer('clip_sleep', -1, 'Clips the sleep phase to this number of objects if >=0')
 
 tf.flags.DEFINE_string('ws_annealing', 'none', 'choose from: exp, linear, dist')
 tf.flags.DEFINE_float('ws_annealing_arg', 3., '')

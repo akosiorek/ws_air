@@ -5,7 +5,7 @@ import tensorflow.contrib.distributions as tfd
 import ops
 from cell import AIRCell
 from modules import AIRDecoder
-from prior import NumStepsDistribution, RecurrentNormal
+from prior import NumStepsDistribution, RecurrentNormal, ConditionedNormalAdaptor
 import targets
 
 
@@ -20,14 +20,14 @@ class AttendInferRepeat(snt.AbstractModule):
         self._cell = cell
 
         zeros = tf.zeros(self._cell.n_what)
-        self._what_prior = tfd.Normal(zeros, 1.)
+        self._what_prior = ConditionedNormalAdaptor(zeros, 1.)
 
         if recurrent_prior:
             with tf.variable_scope('attend_infer_repeat/air_decoder'):
-                self._where_prior = RecurrentNormal(self._cell.n_where, 10)
+                self._where_prior = RecurrentNormal(self._cell.n_where, 10, conditional=True)
         else:
             zeros = tf.zeros(self._cell.n_where)
-            self._where_prior = tfd.Normal(zeros, 1.)
+            self._where_prior = ConditionedNormalAdaptor(zeros, 1.)
 
         self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
 
@@ -56,14 +56,15 @@ class AttendInferRepeat(snt.AbstractModule):
         ho['data_ll'] = tf.reduce_sum(ho.data_ll_per_pixel, (-2, -1))
 
         # Post-processing
+        squeezed_presence = tf.squeeze(ho.presence, -1)
         num_steps_posterior = NumStepsDistribution(logits=ho.presence_logit[..., 0])
-        ho['num_steps'] = tf.reduce_sum(tf.squeeze(ho.presence, -1), -1)
+        ho['num_steps'] = tf.reduce_sum(squeezed_presence, -1)
         ho['steps_log_prob'] = num_steps_posterior.log_prob(ho.num_steps)
         ho['steps_prior_log_prob'] = self._num_steps_prior.log_prob(ho.num_steps)
 
         for name in 'what where'.split():
             sample = ho[name]
-            prior_log_prob = getattr(self, '_{}_prior'.format(name)).log_prob(sample)
+            prior_log_prob = getattr(self, '_{}_prior'.format(name)).log_prob(sample, conditioning=squeezed_presence)
             prior_log_prob = tf.reduce_sum(prior_log_prob, -1, keep_dims=True)
             ho['{}_prior_log_prob'.format(name)] = prior_log_prob
 
@@ -103,18 +104,25 @@ class AttendInferRepeat(snt.AbstractModule):
         return hidden_outputs, hidden_state[-1]
 
     def sample_p_z(self, sample_size=1, k_tiles=1):
+
+        n = self._num_steps_prior.sample(sample_size)
+
+        F = tf.flags.FLAGS
+        if F.clip_sleep >= 0:
+            print 'clip_sleep', F.clip_sleep
+            n = tf.clip_by_value(n, 0., F.clip_sleep)
+
+        squeezed_presence = tf.sequence_mask(n, maxlen=self._n_steps, dtype=tf.float32)
+        presence = tf.expand_dims(squeezed_presence, -1)
+
         w = []
         for pdf, arg in zip((self._what_prior, self._where_prior),
                             ([sample_size * self._n_steps], [sample_size, self._n_steps])):
-            sample = pdf.sample(arg)
+            sample = pdf.sample(arg, conditioning=squeezed_presence)
             shape = [sample_size, self._n_steps] + sample.shape.as_list()[-1:]
             sample = tf.reshape(sample, shape)
             w.append(sample)
         what, where = w
-
-        n = self._num_steps_prior.sample(sample_size)
-        presence = tf.to_float(tf.sequence_mask(n, maxlen=self._n_steps))
-        presence = tf.expand_dims(presence, -1)
 
         latents = [what, where, presence]
         if k_tiles > 1:
@@ -142,7 +150,7 @@ class Model(object):
     VI_TARGETS = 'iwae reinforce'.split()
     WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw rw+entrw'.split()
     TARGETS = VI_TARGETS + WS_TARGETS
-    INPUT_TYPES = 'normal binary logit'.split()
+    INPUT_TYPES = 'binary normal logit'.split()
 
     def __init__(self, obs, model, k_particles, target,
                  target_arg=None, presence=None, input_type='normal', ws_annealing=None, ws_annealing_arg=None, debug=False):
@@ -324,6 +332,11 @@ class Model(object):
             imp_weights = self.importance_weights
 
         imp_weights = tf.stop_gradient(imp_weights)
+
+        # we subtract sth that has zero expectation, but might help in case when proposal
+        # is very peaked and all weights are the same
+        imp_weights -= tf.ones_like(imp_weights) / self.k_particles
+
         logqz = tf.reshape(self.outputs.log_q_z, (self.batch_size, self.k_particles))
 
         shape1, shape2 = logqz.shape.as_list(), imp_weights.shape.as_list()
