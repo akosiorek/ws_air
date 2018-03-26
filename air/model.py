@@ -29,7 +29,11 @@ class AttendInferRepeat(snt.AbstractModule):
             zeros = tf.zeros(self._cell.n_where)
             self._where_prior = ConditionedNormalAdaptor(zeros, 1.)
 
-        self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
+        # self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
+        with tf.variable_scope('attend_infer_repeat/air_decoder'):
+            zeros = [0.] * (self._n_steps + 1)
+            step_logits = tf.Variable(zeros)
+            self._num_steps_prior = tfd.Categorical(logits=tf.expand_dims(step_logits, 0))
 
         with self._enter_variable_scope():
             self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size, glimpse_decoder,
@@ -112,7 +116,10 @@ class AttendInferRepeat(snt.AbstractModule):
             print 'clip_sleep', F.clip_sleep
             n = tf.clip_by_value(n, 0., F.clip_sleep)
 
+        n = tf.squeeze(n, -1)
+        print 'n', n
         squeezed_presence = tf.sequence_mask(n, maxlen=self._n_steps, dtype=tf.float32)
+        print 'squeezed_p', squeezed_presence
         presence = tf.expand_dims(squeezed_presence, -1)
 
         w = []
