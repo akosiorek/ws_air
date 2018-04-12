@@ -357,6 +357,8 @@ class Model(object):
         u = tf.random_uniform([self.batch_size * self.k_particles])
         from_q = tf.greater_equal(u, alpha)
 
+        # we don't have to tinker with what because it follows N(0, 1) that is not learned
+        # prepare where and log prob from uniform
         where_from_prior = z_from_prior[1]
         ones = tf.ones_like(where_from_prior)
         low, high = -3., 3.
@@ -364,19 +366,22 @@ class Model(object):
         where_from_uniform = where_uniform.sample()
 
         log_p_where_from_uniform = tf.reduce_sum(where_uniform.log_prob(where_from_prior), (-2, -1))
-        z_from_prior[1] = where_from_uniform
 
-        print 'log_p_where_from_uniform', log_p_where_from_uniform, where_from_uniform
-
+        # prepare presence and log prob from uniform and
         presence_from_prior = z_from_prior[2]
-        shape = presence_from_prior.shape.as_list()[:-1] + [self.model._n_steps]
+        shape = tf.squeeze(presence_from_prior, -1).shape.as_list()
         probs = tf.ones(shape) / self.model._n_steps
-        presence_uniform = tfd.Categorical(probs=probs, dtype=tf.float32)
-        presence_from_uniform = presence_uniform.sample()
-        log_p_presence_from_uniform = presence_uniform.log_prob(presence_from_uniform)
-        z_from_prior[2] = presence_from_uniform
+        num_uniform = tfd.Categorical(probs=probs, dtype=tf.float32)
+        steps_from_uniform = num_uniform.sample()
 
-        print 'log_p_presence_from_uniform', log_p_presence_from_uniform, presence_from_uniform, shape, presence_from_prior
+        presence_from_uniform = tf.sequence_mask(steps_from_uniform, maxlen=self.model._n_steps, dtype=tf.float32)
+        presence_from_uniform = tf.expand_dims(presence_from_uniform, -1)
+
+        log_p_steps_from_uniform = num_uniform.log_prob(steps_from_uniform)
+
+        # swap samples
+        z_from_prior[1] = where_from_uniform
+        z_from_prior[2] = presence_from_uniform
 
         zs = []
         for zp, zq in zip(z_from_prior, z_from_q):
@@ -385,13 +390,15 @@ class Model(object):
 
         o = self.model(self.tiled_obs, reuse_samples=zs)
 
-        logpz = o.log_p_z  # we need to subtract log_p_where and log_p_presence from prior and add the ones from uniform
-
+        # swap log probs from prior with the one from the uniform distribution
+        # we need to subtract log_p_where and log_p_presence from prior and add the ones from uniform
+        logpz = o.log_p_z
         log_p_where_from_prior = tf.reduce_sum(o.where_prior_log_prob, (-1, -2))
-        log_p_presence_from_prior = o.presence_prior_log_prob
+        log_steps_from_prior = o.steps_prior_log_prob
 
-        logpz -= log_p_where_from_prior - log_p_presence_from_prior
-        logpz += log_p_where_from_uniform + log_p_presence_from_uniform
+        logpz = logpz \
+                - log_p_where_from_prior - log_steps_from_prior \
+                + log_p_where_from_uniform + log_p_steps_from_uniform
 
         logpxz = o.log_p_x_and_z
         logpz = tf.expand_dims(logpz, -1) + tf.log(alpha)
