@@ -65,7 +65,6 @@ def add_debug_logs(model):
         tensors.update(where_tensors)
 
         for k, v in tensors.iteritems():
-            print 'histogram', k
             v = choose_present(p, v)
             tf.summary.histogram(k, v)
             tf.summary.scalar(k + '/mean', tf.reduce_mean(v))

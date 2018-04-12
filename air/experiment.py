@@ -19,13 +19,15 @@ flags.DEFINE_integer('batch_size', 32, '')
 flags.DEFINE_integer('train_itr', int(2e6), 'Number of training iterations')
 flags.DEFINE_integer('log_itr', int(1e3), 'Number of iterations between logs')
 flags.DEFINE_integer('report_loss_every', int(1e3), 'Number of iterations better reporting minibatch loss - hearbeat')
-flags.DEFINE_integer('snapshot_itr', int(2.5e4), 'Number of iterations between model snapshots')
-flags.DEFINE_integer('eval_itr', int(5e3), 'Number of iterations between log p(x) is estimated')
+flags.DEFINE_integer('snapshot_itr', int(1e5), 'Number of iterations between model snapshots')
+flags.DEFINE_integer('eval_itr', int(10e3), 'Number of iterations between log p(x) is estimated')
 
 flags.DEFINE_string('opt', 'rmsprop', 'choose from rmsprop, adam, sgd, momentum')
 flags.DEFINE_float('learning_rate', 1e-5, 'Initial values of the learning rate')
-flags.DEFINE_float('l2', 0.0, 'Weight for the l2 regularisation of parameters')
-flags.DEFINE_boolean('schedule', False, 'Uses a learning rate schedule if True')
+flags.DEFINE_float('l2', 1e-5, 'Weight for the l2 regularisation of parameters')
+flags.DEFINE_string('schedule', '4,6,10', 'Uses a learning rate schedule evaluates to True. Schedule = \'4,6,10\' '
+                                           'means that F.train_itr will be split in proportions 4/s, 6/s, 10/s,'
+                                           'where s = sum(schedule)')
 
 flags.DEFINE_boolean('test_run', True, 'Only a small run if True')
 flags.DEFINE_boolean('restore', False, 'Tries to restore the latest checkpoint if True')
@@ -56,7 +58,7 @@ if F.test_run:
 
     F.debug = True
     F.opt = 'adam'
-    F.schedule = '4,6,10'
+    # F.schedule = '4,6,10'
     F.target = 'rw+rw'
     # F.target = 'rw+mrw'
     # F.alpha = .1
