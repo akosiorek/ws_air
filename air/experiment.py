@@ -47,19 +47,19 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
-    F.target = 'rw+s'
     F.step_success_prob = .75
     F.rec_prior = True
     F.k_particles = 5
-    # F.target_arg = 'annealed_0.5'
     F.input_type = 'binary'
-    # F.output_std = 1.
-    F.clip_gradient = 1e-3
-    # F.ws_annealing = 'dist'
-    # F.ws_annealing_arg = 3.
-    # F.schedule = True
+
+    F.learnable_step_prior = True
+
     F.debug = True
     F.opt = 'adam'
+    F.schedule = '4,6,10'
+    F.target = 'rw+rw'
+    # F.target = 'rw+mrw'
+    # F.alpha = .1
 
 # Load Data and model
 data_dict = load_data(F.batch_size)
@@ -94,9 +94,14 @@ n_iters_per_epoch = data_dict['train_data'].imgs.shape[0] // F.batch_size
 
 lr = F.learning_rate
 if F.schedule:
-    boundary_itr = [int(i * 1e5) for i in (2, 8)]
-    lrs = [lr, lr / 3.33, lr / 10.]
-    learning_rate = tf.train.piecewise_constant(global_step, boundary_itr, lrs)
+    schedule = [float(f) for f in F.schedule.split(',')]
+    schedule = np.cumsum(schedule)
+    schedule = schedule * F.train_itr / schedule[-1]
+    schedule = list(np.round(schedule).astype(np.int32))
+    lrs = list(lr * (1./3) ** np.arange(len(schedule)))
+    lr = tf.train.piecewise_constant(global_step, schedule[:-1], lrs)
+    tf.summary.scalar('learning_rate', lr)
+
 
 opt = F.opt.lower()
 if opt == 'rmsprop':

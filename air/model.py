@@ -13,7 +13,7 @@ class AttendInferRepeat(snt.AbstractModule):
     """Implements both the inference and the generative mdoel for AIRModel"""
 
     def __init__(self, n_steps, output_std, prior_step_success_prob, cell, glimpse_decoder,
-                 mean_img=None, recurrent_prior=False, output_type='normal'):
+                 mean_img=None, recurrent_prior=False, output_type='normal', learnable_step_prior=False):
 
         super(AttendInferRepeat, self).__init__()
         self._n_steps = n_steps
@@ -29,12 +29,14 @@ class AttendInferRepeat(snt.AbstractModule):
             zeros = tf.zeros(self._cell.n_where)
             self._where_prior = ConditionedNormalAdaptor(zeros, 1.)
 
-        # self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
-        with tf.variable_scope('attend_infer_repeat/air_decoder'):
-            zeros = [0.] * (self._n_steps + 1)
-            # zeros = tf.random_normal(shape=[self._n_steps + 1])
-            step_logits = tf.Variable(zeros, trainable=True, dtype=tf.float32, name='step_prior_log_probs')
-            self._num_steps_prior = tfd.Categorical(logits=step_logits)
+        if learnable_step_prior:
+            with tf.variable_scope('attend_infer_repeat/air_decoder'):
+                zeros = [0.] * (self._n_steps + 1)
+                step_logits = tf.Variable(zeros, trainable=True, dtype=tf.float32, name='step_prior_log_probs')
+                self._num_steps_prior = tfd.Categorical(logits=step_logits)
+
+        else:
+            self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
 
         with self._enter_variable_scope():
             self._decoder = AIRDecoder(self._cell._img_size, self._cell._glimpse_size, glimpse_decoder,
@@ -355,6 +357,27 @@ class Model(object):
         u = tf.random_uniform([self.batch_size * self.k_particles])
         from_q = tf.greater_equal(u, alpha)
 
+        where_from_prior = z_from_prior[1]
+        ones = tf.ones_like(where_from_prior)
+        low, high = -3., 3.
+        where_uniform = tfd.Uniform(low * ones, high * ones)
+        where_from_uniform = where_uniform.sample()
+
+        log_p_where_from_uniform = tf.reduce_sum(where_uniform.log_prob(where_from_prior), (-2, -1))
+        z_from_prior[1] = where_from_uniform
+
+        print 'log_p_where_from_uniform', log_p_where_from_uniform, where_from_uniform
+
+        presence_from_prior = z_from_prior[2]
+        shape = presence_from_prior.shape.as_list()[:-1] + [self.model._n_steps]
+        probs = tf.ones(shape) / self.model._n_steps
+        presence_uniform = tfd.Categorical(probs=probs, dtype=tf.float32)
+        presence_from_uniform = presence_uniform.sample()
+        log_p_presence_from_uniform = presence_uniform.log_prob(presence_from_uniform)
+        z_from_prior[2] = presence_from_uniform
+
+        print 'log_p_presence_from_uniform', log_p_presence_from_uniform, presence_from_uniform, shape, presence_from_prior
+
         zs = []
         for zp, zq in zip(z_from_prior, z_from_q):
             z = tf.where(from_q, zq, zp)
@@ -362,8 +385,16 @@ class Model(object):
 
         o = self.model(self.tiled_obs, reuse_samples=zs)
 
+        logpz = o.log_p_z  # we need to subtract log_p_where and log_p_presence from prior and add the ones from uniform
+
+        log_p_where_from_prior = tf.reduce_sum(o.where_prior_log_prob, (-1, -2))
+        log_p_presence_from_prior = o.presence_prior_log_prob
+
+        logpz -= log_p_where_from_prior - log_p_presence_from_prior
+        logpz += log_p_where_from_uniform + log_p_presence_from_uniform
+
         logpxz = o.log_p_x_and_z
-        logpz = tf.expand_dims(o.log_p_z, -1) + tf.log(alpha)
+        logpz = tf.expand_dims(logpz, -1) + tf.log(alpha)
         logqz = tf.expand_dims(o.log_q_z, -1) + tf.log(1. - alpha)
 
         logpz_and_logqz = tf.concat([logpz, logqz], -1)
