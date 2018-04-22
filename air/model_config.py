@@ -36,6 +36,8 @@ tf.flags.DEFINE_integer('clip_sleep', -1, 'Clips the sleep phase to this number 
 tf.flags.DEFINE_string('ws_annealing', 'none', 'choose from: exp, linear, dist')
 tf.flags.DEFINE_float('ws_annealing_arg', 3., '')
 
+flags.DEFINE_integer('n_units', 8, 'Number of units in blocks of 32; 8 means 8x32=256')
+
 flags.DEFINE_string('target', 'iwae', 'choose from: {}'.format(Model.TARGETS))
 
 
@@ -92,11 +94,11 @@ def load(img, num, mean_img=None, debug=False):
         gradients_through_z = False
 
     glimpse_size = [20, 20]
-    n_hidden = 32 * 8
+    n_hidden = 32 * F.n_units
     n_layers = 2
     n_hiddens = [n_hidden] * n_layers
     n_what = 50
-    steps_pred_hidden = [128, 64]
+    steps_pred_hidden = [n_hidden / 2, n_hidden / 4]
 
     shape = img.shape.as_list()
     batch_size, img_size = shape[0], shape[1:]
