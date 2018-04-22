@@ -12,14 +12,14 @@ flags.DEFINE_integer('seq_len', 0, '')
 axes = {'imgs': 0, 'labels': 0, 'nums': 1}
 
 
-def load(batch_size):
+def load(batch_size, shuffle=True):
 
     f = flags.FLAGS
 
     valid_data = _load_data(f.valid_path)
     train_data = _load_data(f.train_path)
 
-    train_tensors = _tensors(train_data, batch_size, axes, shuffle=True)
+    train_tensors = _tensors(train_data, batch_size, axes, shuffle=shuffle)
     valid_tensors = _tensors(valid_data, batch_size, axes, shuffle=False)
 
     train_tensors['nums'] = tf.transpose(train_tensors['nums'][..., 0])
