@@ -33,15 +33,6 @@ os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
 
 if __name__ == '__main__':
 
-    data_dict = load_data(F.batch_size, shuffle=False)
-    mean_img = data_dict.train_data.imgs.mean(0)
-
-    if F.dataset == 'test':
-        n_batches = data_dict.train_data.imgs.shape[0] // F.batch_size
-        img, num = data_dict.train_img, data_dict.train_num
-    else:
-        n_batches = data_dict.test_data.imgs.shape[0] // F.batch_size
-        img, num = data_dict.test_img, data_dict.test_num
 
     run_names = F.run_name
     if len(run_names) == 0:
@@ -72,6 +63,17 @@ if __name__ == '__main__':
             raise ValueError('every_nth_checkpoint has an invalid value of {}'.format(F.every_nth_checkpoint))
 
         tf.reset_default_graph()
+
+        data_dict = load_data(F.batch_size, shuffle=False)
+        mean_img = data_dict.train_data.imgs.mean(0)
+
+        if F.dataset == 'test':
+            n_batches = data_dict.train_data.imgs.shape[0] // F.batch_size
+            img, num = data_dict.train_img, data_dict.train_num
+        else:
+            n_batches = data_dict.test_data.imgs.shape[0] // F.batch_size
+            img, num = data_dict.test_img, data_dict.test_num
+
         model = load_model(img=img, num=num, mean_img=mean_img)
 
         saver = tf.train.Saver()
@@ -91,7 +93,7 @@ if __name__ == '__main__':
 
             start = time.time()
             for batch_num in xrange(n_batches):
-                log_p_x_batch = sess.run(model.iwae)
+                log_p_x_batch = sess.run(model.elbo_iwae)
                 log_p_x_estimate += log_p_x_batch
 
             log_p_x_estimate /= n_batches
