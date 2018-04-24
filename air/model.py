@@ -228,7 +228,7 @@ class Model(object):
 
         if self.target in self.VI_TARGETS:
             if self.target in 'iwae reinforce'.split():
-                log_probs = self.outputs.steps_log_prob + self.outputs.steps_prior_log_prob
+                log_probs = self.outputs.steps_log_prob
                 if self.target == 'iwae':
                     target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
                 elif self.target == 'reinforce':
