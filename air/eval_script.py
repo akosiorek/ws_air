@@ -18,13 +18,12 @@ flags.DEFINE_string('run_name', '', '')
 
 flags.DEFINE_integer('batch_size', 5, '')
 
-flags.DEFINE_integer('n_samples', 5, 'this many importance weights will be used')
-
 flags.DEFINE_integer('every_nth_checkpoint', 1, 'takes 1 in nth checkpoints to evaluate; takes only the last checkpoint if -1')
 
 flags.DEFINE_string('dataset', 'test', 'test or train')
 
-flags.DEFINE_boolean('eval_logp', True, '')
+flags.DEFINE_boolean('logp', True, '')
+flags.DEFINE_boolean('vae', True, '')
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
 
@@ -80,7 +79,11 @@ if __name__ == '__main__':
         sess = tools.get_session()
         sess.run(tf.global_variables_initializer())
 
-        log_p_x_file = os.path.join(logdir, 'logpx_{}.txt'.format(F.dataset))
+        if F.logp:
+            log_p_x_file = os.path.join(logdir, 'logpx_{}.txt'.format(F.dataset))
+        
+        if F.vae:
+            vae_file = os.path.join(logdir, 'vae_{}.txt'.format(F.dataset))
 
         for checkpoint_path in checkpoint_paths:
             n_itr = int(checkpoint_path.split('-')[-1])
@@ -89,16 +92,24 @@ if __name__ == '__main__':
             saver.restore(sess, checkpoint_path)
 
             log_p_x_estimate = 0.
-            log_ess = []
+            vae_estimate = 0.
 
             start = time.time()
             for batch_num in xrange(n_batches):
-                log_p_x_batch = sess.run(model.elbo_iwae)
+                log_p_x_batch, vae_batch = sess.run([model.elbo_iwae, model.elbo_vae])
                 log_p_x_estimate += log_p_x_batch
+                vae_estimate += vae_batch
 
             log_p_x_estimate /= n_batches
-            with open(log_p_x_file, 'a') as f:
-                f.write('{}: {}\n'.format(n_itr, log_p_x_estimate))
+            vae_estimate /= n_batches
+
+            if F.logp:
+                with open(log_p_x_file, 'a') as f:
+                    f.write('{}: {}\n'.format(n_itr, log_p_x_estimate))
+
+            if F.vae:
+                with open(vae_file, 'a') as f:
+                    f.write('{}: {}\n'.format(n_itr, vae_estimate))
 
             duration = time.time() - start
             print 'took {}s'.format(duration)
