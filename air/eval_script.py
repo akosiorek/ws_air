@@ -1,6 +1,7 @@
 import os
 import time
 
+import numpy as np
 import tensorflow as tf
 from tensorflow.python.util import nest
 
@@ -25,6 +26,11 @@ flags.DEFINE_string('dataset', 'test', 'test or train')
 
 flags.DEFINE_boolean('logp', True, '')
 flags.DEFINE_boolean('vae', True, '')
+flags.DEFINE_boolean('resume', False, 'Tries to resume if True. Throws an error if False and any of the log files exist'
+                                      ' unless F.overwrite is True')
+
+flags.DEFINE_boolean('overwrite', False, '')
+
 flags.DEFINE_string('gpu', '0', 'Id of the gpu to allocate')
 
 
@@ -32,7 +38,6 @@ F = flags.FLAGS
 os.environ['CUDA_VISIBLE_DEVICES'] = F.gpu
 
 if __name__ == '__main__':
-
 
     run_names = F.run_name
     if len(run_names) == 0:
@@ -95,14 +100,35 @@ if __name__ == '__main__':
         sess = tools.get_session()
         sess.run(tf.global_variables_initializer())
 
+        evaluated_checkpoints = set()
+
+        def check_logfile(path):
+            global evaluated_checkpoints
+
+            if os.path.exists(path):
+                if not F.resume and not F.overwrite:
+                    raise RuntimeError('Log file {} exists!'.format(path))
+                elif F.resume:
+                    results = np.loadtxt(path, delimiter=': ')
+                    iters = set(results[:, 0])
+                    evaluated_checkpoints += iters
+                elif F.overwrite:
+                    os.rmdir(path)
+
         if F.logp:
             log_p_x_file = os.path.join(logdir, 'logpx_{}.txt'.format(F.dataset))
-        
+            check_logfile(log_p_x_file)
+
         if F.vae:
             vae_file = os.path.join(logdir, 'vae_{}.txt'.format(F.dataset))
+            check_logfile(vae_file)
 
         for checkpoint_path in checkpoint_paths:
             n_itr = int(checkpoint_path.split('-')[-1])
+
+            if n_itr in evaluated_checkpoints:
+                print 'Skipping checkpoint:', n_itr
+                continue
 
             print 'Processing checkpoint:', n_itr,
             saver.restore(sess, checkpoint_path)
