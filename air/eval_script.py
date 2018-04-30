@@ -19,6 +19,7 @@ flags.DEFINE_string('run_name', '', '')
 flags.DEFINE_integer('batch_size', 5, '')
 
 flags.DEFINE_integer('every_nth_checkpoint', 1, 'takes 1 in nth checkpoints to evaluate; takes only the last checkpoint if -1')
+flags.DEFINE_integer('from_itr', 0, 'Evaluates only checkpoints with training iteration greater than `from_itr`')
 
 flags.DEFINE_string('dataset', 'test', 'test or train')
 
@@ -50,6 +51,21 @@ if __name__ == '__main__':
             continue
 
         checkpoint_paths = checkpoint_state.all_model_checkpoint_paths
+
+        if F.from_itr > 0:
+            itrs = [(int(p.split('-')[-1]), p) for p in checkpoint_paths]
+            itrs = sorted(itrs, key=lambda x: x[0])
+           
+            print itrs
+            for i, (itr, _) in enumerate(itrs):
+                print i, itr, F.from_itr
+                if itr >= F.from_itr:
+                    break
+
+            itrs = itrs[i:]
+            checkpoint_paths = [i[1] for i in itrs]
+
+
         last_checkpoint = checkpoint_paths[-1]
 
         if F.every_nth_checkpoint >= 0:
@@ -57,7 +73,7 @@ if __name__ == '__main__':
             if checkpoint_paths[-1] != last_checkpoint:
                 checkpoint_paths.append(last_checkpoint)
         elif F.every_nth_checkpoint == -1:
-            checkpoint_paths = [checkpoint_paths[-1]]
+            checkpoint_paths = [last_checkpoint]
         else:
             raise ValueError('every_nth_checkpoint has an invalid value of {}'.format(F.every_nth_checkpoint))
 
