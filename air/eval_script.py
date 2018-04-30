@@ -61,9 +61,7 @@ if __name__ == '__main__':
             itrs = [(int(p.split('-')[-1]), p) for p in checkpoint_paths]
             itrs = sorted(itrs, key=lambda x: x[0])
            
-            print itrs
             for i, (itr, _) in enumerate(itrs):
-                print i, itr, F.from_itr
                 if itr >= F.from_itr:
                     break
 
@@ -111,7 +109,7 @@ if __name__ == '__main__':
                 elif F.resume:
                     results = np.loadtxt(path, delimiter=': ')
                     iters = set(results[:, 0])
-                    evaluated_checkpoints += iters
+                    evaluated_checkpoints = evaluated_checkpoints.union(iters)
                 elif F.overwrite:
                     os.rmdir(path)
 
@@ -131,6 +129,8 @@ if __name__ == '__main__':
                 continue
 
             print 'Processing checkpoint:', n_itr,
+            sys.stdout.flush()
+
             saver.restore(sess, checkpoint_path)
 
             log_p_x_estimate = 0.
