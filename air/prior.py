@@ -3,6 +3,9 @@ import tensorflow as tf
 import tensorflow.contrib.distributions as tfd
 from tensorflow.python.ops.distributions import util as tfd_util
 from tensorflow.python.ops.distributions import distribution
+from tensorflow.python.ops.distributions import util as distribution_util
+from tensorflow.python.ops.distributions.categorical import  _broadcast_cat_event_and_params
+
 
 import sonnet as snt
 
@@ -66,7 +69,15 @@ def _cumprod(tensor, axis=0):
 def bernoulli_to_modified_geometric(presence_prob):
     presence_prob = tf.cast(presence_prob, tf.float64)
     inv = 1. - presence_prob
-    prob = _cumprod(presence_prob, axis=-1)
+
+    # prob = _cumprod(presence_prob, axis=-1)
+    # prob = tf.cumprod(presence_prob, axis=-1)
+
+    prob = [presence_prob[..., 0]]
+    for t in xrange(1, presence_prob.shape[-1]):
+        prob.append(prob[-1] * presence_prob[..., t])
+    prob = tf.stack(prob, -1)
+
     modified_prob = tf.concat([inv[..., :1], inv[..., 1:] * prob[..., :-1], prob[..., -1:]], -1)
     modified_prob /= tf.reduce_sum(modified_prob, -1, keep_dims=True)
     return tf.cast(modified_prob, tf.float32)
@@ -219,3 +230,17 @@ class ConditionedNormalAdaptor(tfd.Normal):
             del kwargs['conditioning']
 
         return super(ConditionedNormalAdaptor, self).sample(*args, **kwargs)
+
+
+class MyCategorical(tfd.Categorical):
+
+    def _log_prob(self, k):
+        k = tf.convert_to_tensor(k, name="k")
+        if self.validate_args:
+            k = distribution_util.embed_check_integer_casting_closed(
+                k, target_dtype=tf.int32)
+        k, logits = _broadcast_cat_event_and_params(
+            k, self.logits, base_dtype=self.dtype.base_dtype)
+
+        k = tf.one_hot(k, logits.shape[-1])
+        return -tf.nn.softmax_cross_entropy_with_logits_v2(labels=k, logits=logits)

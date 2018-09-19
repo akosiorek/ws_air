@@ -5,8 +5,9 @@ import tensorflow.contrib.distributions as tfd
 import ops
 from cell import AIRCell
 from modules import AIRDecoder
-from prior import NumStepsDistribution, RecurrentNormal, ConditionedNormalAdaptor
+from prior import NumStepsDistribution, RecurrentNormal, ConditionedNormalAdaptor, MyCategorical
 import targets
+import sga
 
 
 class AttendInferRepeat(snt.AbstractModule):
@@ -33,7 +34,8 @@ class AttendInferRepeat(snt.AbstractModule):
             with tf.variable_scope('attend_infer_repeat/air_decoder'):
                 zeros = [0.] * (self._n_steps + 1)
                 step_logits = tf.Variable(zeros, trainable=True, dtype=tf.float32, name='step_prior_log_probs')
-                self._num_steps_prior = tfd.Categorical(logits=step_logits)
+                # self._num_steps_prior = tfd.Categorical(logits=step_logits)
+                self._num_steps_prior = MyCategorical(logits=step_logits)
 
         else:
             self._num_steps_prior = tfd.Geometric(probs=1 - prior_step_success_prob)
@@ -155,6 +157,7 @@ class Model(object):
     internal_decode = False
     VI_TARGETS = 'iwae reinforce'.split()
     WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw rw+entrw'.split()
+    WS_TARGETS += [i + '+sga' for i in WS_TARGETS]
     TARGETS = VI_TARGETS + WS_TARGETS
     INPUT_TYPES = 'binary normal logit'.split()
 
@@ -171,6 +174,13 @@ class Model(object):
         self.obs = obs
         self.model = model
         self.k_particles = k_particles
+
+        if 'sga' in target:
+            self.with_sga = True
+            target = '+'.join(target.split('+')[:-1])
+        else:
+            self.with_sga = False
+
         self.target = target
         self.target_arg = target_arg
 
@@ -310,9 +320,20 @@ class Model(object):
             encoder_target += l2_reg
 
             target = decoder_target + encoder_target
-            decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
-            encoder_gvs = opt.compute_gradients(encoder_target, var_list=encoder_vars)
-            gvs = decoder_gvs + encoder_gvs
+
+            if self.with_sga:
+                losses = [decoder_target, encoder_target]
+                params = [decoder_vars, encoder_vars]
+                grads = sga.sga(losses, params)
+
+                params = decoder_vars + encoder_vars
+                gvs = [(g, v) for g, v in zip(grads, params)]
+
+            else:
+                decoder_gvs = opt.compute_gradients(decoder_target, var_list=decoder_vars)
+                encoder_gvs = opt.compute_gradients(encoder_target, var_list=encoder_vars)
+                gvs = decoder_gvs + encoder_gvs
+
         else:
             raise ValueError('Invalid target: {}'.format(self.target))
 
