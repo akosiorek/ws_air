@@ -59,6 +59,7 @@ def get_session(tfdbg=False):
 def make_logger(air, sess, writer, train_tensor, num_train_batches, test_tensor, num_test_batches, eval_on_train):
     exprs = {
         'elbo_vae': air.elbo_vae,
+        'elbo_miwae': air.elbo_miwae,
         'elbo_iwae': air.elbo_iwae,
         'num_steps': air.num_steps,
         'num_steps_acc': air.num_step_accuracy,

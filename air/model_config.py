@@ -20,6 +20,7 @@ tf.flags.DEFINE_float('step_success_prob', -1., 'in [0, 1.]; it\'s annealed from
 tf.flags.DEFINE_boolean('learnable_step_prior', False, '')
 
 tf.flags.DEFINE_float('n_anneal_steps_loss', 1e3, '')
+tf.flags.DEFINE_integer('mc_samples', 1, '')
 tf.flags.DEFINE_integer('k_particles', 5, '')
 
 tf.flags.DEFINE_integer('n_steps_per_image', 3, '')
@@ -126,7 +127,7 @@ def load(img, num, mean_img=None, debug=False):
                             learnable_step_prior=F.learnable_step_prior
                             )
 
-    model = Model(img, air, F.k_particles, target=target, target_arg=F.target_arg, presence=num,
+    model = Model(img, air, F.mc_samples, F.k_particles, target=target, target_arg=F.target_arg, presence=num,
                   input_type=F.input_type, ws_annealing=F.ws_annealing, ws_annealing_arg=F.ws_annealing_arg)
 
     if debug:

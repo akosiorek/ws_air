@@ -8,6 +8,8 @@ from model_config import load as load_model
 from data_config import load as load_data
 from tools import save_flags, get_session, make_logger, gradient_summaries
 
+# python air/experiment.py --notest_run --run_name sga --learnable_step_prior --k_particles 5 --target w+s+sga --gpu 5
+
 flags = tf.flags
 
 
@@ -49,17 +51,23 @@ if F.test_run:
     F.eval_on_train = False
     F.report_loss_every = 10
     F.log_itr = 10
+    F.eval_itr = 50
     F.step_success_prob = .75
     F.rec_prior = True
+    F.mc_samples = 2
     F.k_particles = 5
     F.input_type = 'binary'
 
-    F.learnable_step_prior = True
+    # F.learnable_step_prior = True
+    F.learnable_step_prior = False
 
     F.debug = True
-    F.opt = 'adam'
+    # F.opt = 'adam'
     # F.schedule = '4,6,10'
-    F.target = 'rw+rw'
+    # F.target = 'rw+rw'
+    # F.target = 'rw+rw+sga'
+    F.target = 'piwae'
+    # F.target = 'iwae'
     # F.target = 'rw+mrw'
     # F.alpha = .1
 
@@ -72,7 +80,7 @@ model = load_model(img=data_dict.train_img, num=data_dict.train_num, mean_img=me
 num_params = sum([np.prod(v.shape.as_list()) for v in tf.trainable_variables()])
 print 'Number of trainable parameters:', num_params
 
-run_name = '{}_k={}_target={}'.format(F.run_name, F.k_particles, F.target)
+run_name = '{}_m={}_k={}_target={}'.format(F.run_name, F.mc_samples, F.k_particles, F.target)
 if F.target_arg:
     run_name += '_{}'.format(F.target_arg)
 
@@ -86,6 +94,7 @@ checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
 
 # ELBO
 tf.summary.scalar('elbo/iwae', model.elbo_iwae)
+tf.summary.scalar('elbo/mwae', model.elbo_miwae)
 tf.summary.scalar('elbo/vae', model.elbo_vae)
 tf.summary.scalar('steps/num', model.num_steps)
 tf.summary.scalar('steps/accuracy', model.num_step_accuracy)
@@ -175,6 +184,8 @@ if 'annealed' in F.target_arg:
 
 train_data, valid_data = [data_dict[k] for k in 'train_tensors valid_tensors'.split()]
 num_train_batches, num_valid_batches = [data_dict[k].imgs.shape[0] // F.batch_size for k in 'train_data valid_data'.split()]
+num_train_batches, num_valid_batches = [i//100 for i in [num_train_batches, num_valid_batches]]
+
 evaluate = make_logger(model, sess, summary_writer, train_data, num_train_batches, valid_data, num_valid_batches, F.eval_on_train)
 
 

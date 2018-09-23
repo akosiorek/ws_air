@@ -155,13 +155,15 @@ class Model(object):
     """Generic AIRModel model"""
     output_std = 1.
     internal_decode = False
-    VI_TARGETS = 'iwae reinforce'.split()
+    VI_TARGETS = 'iwae reinforce ciwae miwae'.split()
     WS_TARGETS = 'w+s rw+s rw+rw rw+rws rw+mrw rw+regrw rw+entrw'.split()
-    WS_TARGETS += [i + '+sga' for i in WS_TARGETS]
-    TARGETS = VI_TARGETS + WS_TARGETS
+    SPLIT_TARGETS = WS_TARGETS + 'piwae'.split()
+    SPLIT_TARGETS += [i + '+sga' for i in SPLIT_TARGETS]
+
+    TARGETS = set(VI_TARGETS + WS_TARGETS + SPLIT_TARGETS)
     INPUT_TYPES = 'binary normal logit'.split()
 
-    def __init__(self, obs, model, k_particles, target,
+    def __init__(self, obs, model, mc_samples, k_particles, target,
                  target_arg=None, presence=None, input_type='normal', ws_annealing=None, ws_annealing_arg=None, debug=False):
         """
 
@@ -173,7 +175,9 @@ class Model(object):
         """
         self.obs = obs
         self.model = model
+        self.mc_samples = mc_samples
         self.k_particles = k_particles
+        self.total_num_samples = self.mc_samples * self.k_particles
 
         if 'sga' in target:
             self.with_sga = True
@@ -201,8 +205,8 @@ class Model(object):
             self.obs = tf.log(obs / (1. - obs))
 
         self.img_size = shape[1:]
-        self.tiled_batch_size = self.batch_size * self.k_particles
-        self.tiled_obs = ops.tile_input_for_iwae(obs, self.k_particles, with_time=False)
+        self.tiled_batch_size = self.batch_size * self.total_num_samples
+        self.tiled_obs = ops.tile_input_for_iwae(obs, self.total_num_samples, with_time=False)
 
         with tf.variable_scope(self.__class__.__name__):
             self._build()
@@ -212,14 +216,18 @@ class Model(object):
         self.outputs = self.model(self.tiled_obs)
 
         log_weights = self.outputs.log_weights
-        self.log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
+        self.log_weights = tf.reshape(log_weights, (self.batch_size, self.mc_samples, self.k_particles))
 
         self.importance_weights = tf.stop_gradient(tf.nn.softmax(self.log_weights, -1))
         self.ess = ops.ess(self.importance_weights, average=True)
         tf.summary.scalar('ess/value', self.ess)
 
         self.elbo_vae = tf.reduce_mean(self.log_weights)
-        self.elbo_iwae_per_example = tf.reduce_logsumexp(self.log_weights, -1) - tf.log(float(self.k_particles))
+
+        self.elbo_miwae_per_example = tf.reduce_logsumexp(self.log_weights, 2) - tf.log(float(self.k_particles))
+        self.elbo_miwae = tf.reduce_mean(self.elbo_miwae_per_example)
+
+        self.elbo_iwae_per_example = tf.reduce_logsumexp(self.log_weights, (1, 2)) - tf.log(float(self.total_num_samples))
         self.elbo_iwae = tf.reduce_mean(self.elbo_iwae_per_example)
 
         self.num_steps_per_example = self.outputs.num_steps
@@ -228,8 +236,8 @@ class Model(object):
         if self.gt_presence is not None:
             self.gt_num_steps = tf.reduce_sum(self.gt_presence, -1)
             num_step_per_sample = self.num_steps_per_example
-            num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.k_particles))
-            gt_num_steps = tf.expand_dims(self.gt_num_steps, -1)
+            num_step_per_sample = tf.reshape(num_step_per_sample, (self.batch_size, self.mc_samples, self.k_particles))
+            gt_num_steps = self.gt_num_steps[..., tf.newaxis, tf.newaxis]
 
             acc = tf.to_float(tf.equal(gt_num_steps, num_step_per_sample))
             self.num_step_accuracy = self._imp_weighted_mean(acc)
@@ -239,48 +247,49 @@ class Model(object):
         if self.target in self.VI_TARGETS:
             if self.target in 'iwae reinforce'.split():
                 log_probs = self.outputs.steps_log_prob
+                log_weights = snt.BatchFlatten()(self.log_weights)
                 if self.target == 'iwae':
-                    target = targets.vimco(self.log_weights, log_probs, self.elbo_iwae_per_example)
+                    target = targets.vimco(log_weights, log_probs, self.elbo_iwae_per_example)
                 elif self.target == 'reinforce':
-                    target = targets.reinforce(self.log_weights, log_probs, self.elbo_iwae_per_example)
+                    target = targets.reinforce(log_weights, log_probs, self.elbo_iwae_per_example)
 
             target += self._l2_reg(l2_reg)
             gvs = opt.compute_gradients(target)
 
-        elif self.target in self.WS_TARGETS:
+        elif self.target in self.SPLIT_TARGETS:
 
             decoder_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                              scope='attend_infer_repeat/air_decoder')
             encoder_vars = list(set(tf.trainable_variables()) - set(decoder_vars))
 
             importance_weights = self.importance_weights
-
-            if 'annealed' in self.target_arg.lower():
-                target_ess = float(self.target_arg.split('_')[-1]) * self.k_particles
-
-                self.alpha = tf.Variable(1., trainable=False)
-
-                alpha_ess = tf.exp(ops.log_ess(self.alpha * self.log_weights, average=True))
-
-                def exact():
-                    return targets.alpha_for_ess(target_ess, self.log_weights)
-
-                def inc():
-                    return (1. + self.alpha) / 2.
-
-                less = tf.less(alpha_ess, target_ess)
-                alpha_update = self.alpha.assign(tf.cond(less, exact, inc))
-                # tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, alpha_update)
-
-                # self.alpha = targets.alpha_for_ess(target_ess, self.log_weights)
-
-                with tf.control_dependencies([alpha_update]):
-                    importance_weights = tf.nn.softmax(self.log_weights * self.alpha, -1)
-
-                self.alpha_importance_weights = importance_weights
-                self.alpha_ess = ops.ess(importance_weights, average=True)
-                tf.summary.scalar('ess/alpha_value', self.alpha_ess)
-                tf.summary.scalar('ess/alpha', self.alpha)
+            #
+            # if 'annealed' in self.target_arg.lower():
+            #     target_ess = float(self.target_arg.split('_')[-1]) * self.k_particles
+            #
+            #     self.alpha = tf.Variable(1., trainable=False)
+            #
+            #     alpha_ess = tf.exp(ops.log_ess(self.alpha * self.log_weights, average=True))
+            #
+            #     def exact():
+            #         return targets.alpha_for_ess(target_ess, self.log_weights)
+            #
+            #     def inc():
+            #         return (1. + self.alpha) / 2.
+            #
+            #     less = tf.less(alpha_ess, target_ess)
+            #     alpha_update = self.alpha.assign(tf.cond(less, exact, inc))
+            #     # tf.add_to_collection(tf.GraphKeys.UPDATE_OPS, alpha_update)
+            #
+            #     # self.alpha = targets.alpha_for_ess(target_ess, self.log_weights)
+            #
+            #     with tf.control_dependencies([alpha_update]):
+            #         importance_weights = tf.nn.softmax(self.log_weights * self.alpha, -1)
+            #
+            #     self.alpha_importance_weights = importance_weights
+            #     self.alpha_ess = ops.ess(importance_weights, average=True)
+            #     tf.summary.scalar('ess/alpha_value', self.alpha_ess)
+            #     tf.summary.scalar('ess/alpha', self.alpha)
 
             if self.target == 'w+s':
                 decoder_target = -tf.reduce_mean(self.outputs.log_p_x_and_z)
@@ -314,6 +323,11 @@ class Model(object):
 
                 encoder_target = self.annealed_wake_update(encoder_sleep_target, encoder_wake_target, n_train_itr,
                                                            sleep_outputs)
+
+            elif self.target == 'piwae':
+                decoder_target = self.elbo_iwae
+                log_probs = self.outputs.steps_log_prob
+                encoder_target = targets.vimco(self.log_weights, log_probs, self.elbo_miwae_per_example)
 
             l2_reg = self._l2_reg(l2_reg)
             decoder_target += l2_reg
@@ -363,7 +377,7 @@ class Model(object):
         # is very peaked and all weights are the same
         imp_weights -= tf.ones_like(imp_weights) / self.k_particles
 
-        logqz = tf.reshape(self.outputs.log_q_z, (self.batch_size, self.k_particles))
+        logqz = tf.reshape(self.outputs.log_q_z, (self.batch_size, self.mc_samples, self.k_particles))
 
         shape1, shape2 = logqz.shape.as_list(), imp_weights.shape.as_list()
         assert shape1 == shape2, 'shapes are not equal: logqz = {} vs imp weight = {}'.format(shape1, shape2)
@@ -428,7 +442,7 @@ class Model(object):
         logpz_and_logqz = tf.concat([logpz, logqz], -1)
         logpz_and_logqz = tf.reduce_logsumexp(logpz_and_logqz, -1)
         log_weights = logpxz - logpz_and_logqz
-        log_weights = tf.reshape(log_weights, (self.batch_size, self.k_particles))
+        log_weights = tf.reshape(log_weights, (self.batch_size, self.mc_samples, self.k_particles))
         imp_weights = tf.nn.softmax(log_weights, -1)
         return self.wake_encoder_target(imp_weights)
 
@@ -460,7 +474,7 @@ class Model(object):
             imp_weights = self.importance_weights
 
         imp_weights = tf.stop_gradient(imp_weights)
-        logpxz = tf.reshape(self.outputs.log_p_x_and_z, (self.batch_size, self.k_particles))
+        logpxz = tf.reshape(self.outputs.log_p_x_and_z, (self.batch_size, self.mc_samples, self.k_particles))
 
         shape1, shape2 = logpxz.shape.as_list(), imp_weights.shape.as_list()
         assert shape1 == shape2, 'shapes are not equal: logpxz = {} vs imp weight = {}'.format(shape1, shape2)
@@ -507,5 +521,5 @@ class Model(object):
         return weight * sum(map(tf.nn.l2_loss, tf.trainable_variables()))
 
     def _imp_weighted_mean(self, tensor):
-        tensor = tf.reshape(tensor, (self.batch_size, self.k_particles))
+        tensor = tf.reshape(tensor, (self.batch_size, self.mc_samples, self.k_particles))
         return tf.reduce_mean(self.importance_weights * tensor * self.k_particles)
