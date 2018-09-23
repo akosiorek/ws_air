@@ -9,8 +9,15 @@ def chain_sequence(seq):
     return list(itertools.chain(*seq))
 
 
-def jac_vec(ys, xs, vs):
-    return kfac.utils.fwd_gradients(ys, xs, grad_xs=vs, stop_gradients=xs)
+def jac_vec(values, params, vecs):
+    """Computes matmul(Jacobian(values), vecs), where the Jacobian is taken w.r.t. params.
+
+    :param values: list of value tensors
+    :param params: list of parameters
+    :param vecs: list of vecs to be multiplied by the Jacobian
+    :return:
+    """
+    return kfac.utils.fwd_gradients(values, params, grad_xs=vecs, stop_gradients=params)
 
 
 def jac_tran_vec(ys, xs, vs):
@@ -18,13 +25,10 @@ def jac_tran_vec(ys, xs, vs):
     return [tf.zeros_like(x) if dydx is None else dydx for (x, dydx) in zip(xs, dydxs)]
 
 
-def get_sym_adj(Ls, xs, xi=None):
+def get_sym_adj(grads, params):
 
-    if xi is None:
-        xi = [tf.gradients(l, x)[0] for (l, x) in zip(Ls, xs)]
-
-    H_xi = jac_vec(xi, xs, xi)
-    Ht_xi = jac_tran_vec(xi, xs, xi)
+    H_xi = jac_vec(grads, params, grads)
+    Ht_xi = jac_tran_vec(grads, params, grads)
 
     At_xi = [0.5 * (ht - h) for (h, ht) in zip(H_xi, Ht_xi)]
     return At_xi
@@ -40,16 +44,16 @@ def list_dot_product(vals_a, vals_b):
 
 def sga(losses, params, align=True, eps=.1):
 
-    losses = [[l]*len(p) for l, p in zip(losses, params)]
-    losses, params = [chain_sequence(i) for i in (losses, params)]
-    grads = [tf.gradients(l, p)[0] for l, p in zip(losses, params)]
+    # losses = [[l]*len(p) for l, p in zip(losses, params)]
+    # losses, params = [chain_sequence(i) for i in (losses, params)]
+    # grads = [tf.gradients(l, p)[0] for l, p in zip(losses, params)]
 
-    adjustments = get_sym_adj(losses, params, xi=grads)
+    grads = [tf.gradients(l, p) for l, p in zip(losses, params)]
+    grads, params = [chain_sequence(i) for i in (grads, params)]
+    adjustments = get_sym_adj(grads, params)
 
     if align:
         hamiltonian = 0.5 * sum((tf.reduce_sum(tf.square(g)) for g in grads))
-
-        # params = chain_sequence(params)
         ham_grads = tf.gradients(hamiltonian, params)
 
         a = list_dot_product(grads, ham_grads)
