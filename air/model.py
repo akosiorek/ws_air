@@ -245,13 +245,16 @@ class Model(object):
     def make_target(self, opt, n_train_itr=None, l2_reg=0.):
 
         if self.target in self.VI_TARGETS:
-            if self.target in 'iwae reinforce'.split():
-                log_probs = self.outputs.steps_log_prob
+            log_probs = self.outputs.steps_log_prob
+            if self.target == 'iwae':
                 log_weights = snt.BatchFlatten()(self.log_weights)
-                if self.target == 'iwae':
-                    target = targets.vimco(log_weights, log_probs, self.elbo_iwae_per_example)
-                elif self.target == 'reinforce':
-                    target = targets.reinforce(log_weights, log_probs, self.elbo_iwae_per_example)
+                target = targets.vimco(log_weights, log_probs, self.elbo_iwae_per_example)
+
+            elif self.target == 'miwae':
+                target = targets.vimco(self.log_weights, log_probs, self.elbo_miwae_per_example)
+            
+            elif self.target == 'reinforce':
+                target = targets.reinforce(log_weights, log_probs, self.elbo_iwae_per_example)
 
             target += self._l2_reg(l2_reg)
             gvs = opt.compute_gradients(target)
@@ -325,7 +328,8 @@ class Model(object):
                                                            sleep_outputs)
 
             elif self.target == 'piwae':
-                decoder_target = self.elbo_iwae
+                decoder_target = -self.elbo_iwae
+
                 log_probs = self.outputs.steps_log_prob
                 encoder_target = targets.vimco(self.log_weights, log_probs, self.elbo_miwae_per_example)
 
